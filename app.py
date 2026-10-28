@@ -160,7 +160,7 @@ def calcola_portata_accoppiata(h, s, n, d, giacitura_costa, metallo_str, freq, t
 st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar")
 st.markdown(
     "Solutore alle differenze finite (2D FDM) con verifiche **DIN 43671 / Melsom & Booth (Rev. 2.1)** "
-    "e proiezione d'ingombro completa in scala 1:1 (**Sezione Laterale $Y\\text{-}Z$** e **Pianta Meccanica $X\\text{-}Z$**)."
+    "e proiezione d'ingombro a tutta altezza (**Sezione Laterale $Y\\text{-}Z$** e **Pianta Meccanica $X\\text{-}Z$**)."
 )
 
 # ==============================================================================
@@ -247,7 +247,6 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
     min_y = dy_sorm / 2.0
     max_y = H_piastra - dy_sorm / 2.0
 
-    # RISOLUZIONE DEL BUG QUANDO w_b == B_piastra: SE min_x >= max_x SI ASSEGNA IL CENTRO FISSO
     if min_x >= max_x:
         x_sorm = float(B_piastra / 2.0)
         st.sidebar.info(f"Quota X Centro Barra {id_barra}: **{x_sorm:.1f} mm** (centrata a tutta larghezza)")
@@ -523,10 +522,10 @@ col4.metric(
 st.markdown("---")
 
 # ==============================================================================
-# 6. DASHBOARD GRAFICA A 5 VISTE IN SCALA REALE 1:1 (INCLUSA PIANTA MECCANICA X-Z)
+# 6. DASHBOARD GRAFICA A 5 VISTE A TUTTA ALTEZZA (TIPOGRAFIA POTENZIATA)
 # ==============================================================================
 fig = plt.figure(figsize=(26, 10))
-gs = fig.add_gridspec(1, 5, width_ratios=[1.15, 1.15, 0.95, 0.95, 1.15])
+gs = fig.add_gridspec(1, 5, width_ratios=[1.15, 1.15, 0.95, 0.85, 1.05])
 
 ax1 = fig.add_subplot(gs[0, 0])
 ax2 = fig.add_subplot(gs[0, 1])
@@ -538,110 +537,117 @@ ax5 = fig.add_subplot(gs[0, 4])
 def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
     x0 = cfg["x_sorm"] - cfg["dx"] / 2.0
     y0 = cfg["y_sorm"] - cfg["dy"] / 2.0
-    ax.add_patch(patches.Rectangle((x0, y0), cfg["dx"], cfg["dy"], edgecolor=colore_bordo, facecolor='none', linewidth=2.0, linestyle='--'))
+    ax.add_patch(patches.Rectangle((x0, y0), cfg["dx"], cfg["dy"], edgecolor=colore_bordo, facecolor='none', linewidth=2.2, linestyle='--'))
     if cfg["orient"] == MODO_ORIZZ:
         y_p = y0 if "Inferiore" in cfg["lato_piega"] else (y0 + cfg["dy"])
-        ax.plot([x0, x0 + cfg["dx"]], [y_p, y_p], color='#00ff00', linewidth=4.0)
+        ax.plot([x0, x0 + cfg["dx"]], [y_p, y_p], color='#00ff00', linewidth=4.5)
     else:
         x_p = x0 if "Sinistro" in cfg["lato_piega"] else (x0 + cfg["dx"])
-        ax.plot([x_p, x_p], [y0, y0 + cfg["dy"]], color='#00ff00', linewidth=4.0)
+        ax.plot([x_p, x_p], [y0, y0 + cfg["dy"]], color='#00ff00', linewidth=4.5)
     rot_tag = "0°" if cfg["orient"] == MODO_ORIZZ else "90°"
     ax.text(
         cfg["x_sorm"], cfg["y_sorm"], f"{cfg['id']} ({cfg['n']}x, {rot_tag})\n{perc:.1f}%",
-        color='white', weight='bold', fontsize=8, ha='center', va='center',
-        bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.75)
+        color='white', weight='bold', fontsize=9.5, ha='center', va='center',
+        bbox=dict(boxstyle='round,pad=0.25', facecolor='black', alpha=0.80)
     )
 
 
 # 1. MAPPA DENSITÀ |J|
 im1 = ax1.pcolormesh(res["X"], res["Y"], res["J_mag"], shading='auto', cmap='inferno', vmin=0, vmax=max(mb_piastra["J_amm"] * 1.3, J_99_piastra))
-fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04, label="Densità |J| [A/mm²]")
+cbar1 = fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+cbar1.set_label("Densità |J| [A/mm²]", fontsize=11, weight='bold')
+cbar1.ax.tick_params(labelsize=10)
 ax1.streamplot(res["x"], res["y"], res["Jx"], res["Jy"], color='cyan', linewidth=0.7, density=0.85, arrowsize=0.7)
 for (xp, yp) in res["coords_pl"]:
     ax1.add_patch(patches.Circle((xp, yp), radius=diam_pl / 2.0, edgecolor='white', facecolor='none', linewidth=1.2))
 disegna_impronta_e_piega(ax1, cfg_A, p_A, 'cyan')
 disegna_impronta_e_piega(ax1, cfg_B, p_B, 'cyan')
-ax1.set_title("1. Densità |J| e Piega (Verde)", fontsize=10, weight='bold')
-ax1.set_xlabel("Larghezza X [mm]")
-ax1.set_ylabel("Quota Y [mm]")
+ax1.set_title("1. Densità |J| e Piega (Verde)", fontsize=12, weight='bold')
+ax1.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
+ax1.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax1.set_xlim(0, B_piastra)
 ax1.set_ylim(0, H_piastra)
-ax1.set_aspect('equal', adjustable='box')
+ax1.tick_params(labelsize=10)
 
 # 2. MAPPA POTENZIALE ELETTRICO V [mV]
 im2 = ax2.pcolormesh(res["X"], res["Y"], res["V_mV"], shading='auto', cmap='viridis')
-fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04, label="Potenziale [mV]")
+cbar2 = fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+cbar2.set_label("Potenziale [mV]", fontsize=11, weight='bold')
+cbar2.ax.tick_params(labelsize=10)
 for (xp, yp) in res["coords_pl"]:
     ax2.add_patch(patches.Circle((xp, yp), radius=diam_pl / 2.0, edgecolor='white', facecolor='none', linewidth=1.0, alpha=0.7))
 disegna_impronta_e_piega(ax2, cfg_A, p_A, 'red')
 disegna_impronta_e_piega(ax2, cfg_B, p_B, 'red')
-ax2.set_title("2. Potenziale Elettrico [mV]", fontsize=10, weight='bold')
-ax2.set_xlabel("Larghezza X [mm]")
+ax2.set_title("2. Potenziale Elettrico [mV]", fontsize=12, weight='bold')
+ax2.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
+ax2.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax2.set_xlim(0, B_piastra)
 ax2.set_ylim(0, H_piastra)
-ax2.set_aspect('equal', adjustable='box')
+ax2.tick_params(labelsize=10)
 
 # 3. FLUSSO ASSIALE VERTICALE |Iy|
-ax3.plot(np.abs(res["profilo_Iy"]), res["y"], color='#d95f02', linewidth=2.2, label="|Iy(y)| in piastra")
-ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.3, label=f"Centro A ({cfg_A['y_sorm']:.0f} mm)")
-ax3.axhline(cfg_B["y_sorm"], color='green', linestyle='--', linewidth=1.3, label=f"Centro B ({cfg_B['y_sorm']:.0f} mm)")
-ax3.axvline(mb_piastra["I_amm"], color='red', linestyle=':', linewidth=1.8, label=f"I_amm ({mb_piastra['I_amm']:.0f} A)")
+ax3.plot(np.abs(res["profilo_Iy"]), res["y"], color='#d95f02', linewidth=2.4, label="|Iy(y)| in piastra")
+ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.4, label=f"Centro A ({cfg_A['y_sorm']:.0f} mm)")
+ax3.axhline(cfg_B["y_sorm"], color='green', linestyle='--', linewidth=1.4, label=f"Centro B ({cfg_B['y_sorm']:.0f} mm)")
+ax3.axvline(mb_piastra["I_amm"], color='red', linestyle=':', linewidth=2.0, label=f"I_amm ({mb_piastra['I_amm']:.0f} A)")
 ax3.fill_betweenx(res["y"], 0, np.abs(res["profilo_Iy"]), color='#d95f02', alpha=0.2)
-ax3.set_title("3. Flusso Assiale |Iy| [A]", fontsize=10, weight='bold')
-ax3.set_xlabel("Corrente Assiale [A]")
+ax3.set_title("3. Flusso Assiale |Iy| [A]", fontsize=12, weight='bold')
+ax3.set_xlabel("Corrente Assiale [A]", fontsize=11, weight='bold')
+ax3.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax3.set_ylim(0, H_piastra)
 ax3.grid(True, linestyle='--', alpha=0.5)
-ax3.legend(loc='upper right', fontsize=8)
+ax3.legend(loc='upper right', fontsize=9.5)
+ax3.tick_params(labelsize=10)
 
-# 4. PROIEZIONE LATERALE Y-Z (CON SORMONTO SULLA FACCIA PIASTRA + BRACCIO A SBALZO)
+# 4. PROIEZIONE LATERALE Y-Z (A TUTTA ALTEZZA)
 L_DRAW_MAX = 150.0
 prof_pl_disegno = diam_pl * 1.4
 spess_tot_p = n_piastra * s_piastra + (n_piastra - 1) * d_piastra
 
 for idx_p in range(n_piastra):
     z0_p = idx_p * (s_piastra + d_piastra)
-    ax4.add_patch(patches.Rectangle((z0_p, 0), s_piastra, H_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.1))
+    ax4.add_patch(patches.Rectangle((z0_p, 0), s_piastra, H_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.2))
 
 for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'green', p_B, res["I_B"])):
     L_dis = min(cfg["L"], L_DRAW_MAX)
     y_bot = cfg["y_sorm"] - cfg["dy"] / 2.0
     for idx_b in range(cfg["n"]):
         off_b = idx_b * (cfg["s"] + cfg["d"])
-        # Sormonto aderente alla faccia piastra (Z in [spess_tot_p, spess_tot_p + s])
-        ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#d9822b', edgecolor='black', linewidth=1.1))
-        # Braccio a sbalzo lungo Z (da spess_tot_p + s verso destra)
+        # Sormonto aderente alla piastra
+        ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#d9822b', edgecolor='black', linewidth=1.2))
+        # Ala a sbalzo lungo Z
         if cfg["orient"] == MODO_ORIZZ:
-            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, cfg["y_ala"] - cfg["s"] / 2.0), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.0))
+            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, cfg["y_ala"] - cfg["s"] / 2.0), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.1))
         else:
-            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, y_bot), L_dis, cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.0, alpha=0.55, hatch='//'))
+            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, y_bot), L_dis, cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.6, hatch='//'))
 
     y_testo = cfg["y_ala"] if cfg["orient"] == MODO_ORIZZ else cfg["y_sorm"]
     ax4.text(
         spess_tot_p + cfg["s"] + L_dis + 10, y_testo,
         f"{cfg['id']} ({cfg['n']}x): {pc:.1f}%\n({corr_ramo:.0f} A)",
-        color=colore, fontsize=8, weight='bold', va='center'
+        color=colore, fontsize=9.5, weight='bold', va='center'
     )
 
 y_pl_unici = sorted(set(yp for (_, yp) in res["coords_pl"]))
 for yp in y_pl_unici:
-    ax4.add_patch(patches.Rectangle((-prof_pl_disegno, yp - diam_pl / 2.0), prof_pl_disegno, diam_pl, facecolor='#333333', edgecolor='black', linewidth=0.9))
+    ax4.add_patch(patches.Rectangle((-prof_pl_disegno, yp - diam_pl / 2.0), prof_pl_disegno, diam_pl, facecolor='#333333', edgecolor='black', linewidth=1.0))
 
-ax4.set_title("4. Sezione Laterale Y-Z", fontsize=10, weight='bold')
-ax4.set_xlabel("Profondità Z [mm]")
+ax4.set_title("4. Sezione Laterale Y-Z", fontsize=12, weight='bold')
+ax4.set_xlabel("Profondità Z [mm]", fontsize=11, weight='bold')
+ax4.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax4.set_xlim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 160)
 ax4.set_ylim(0, H_piastra)
-ax4.set_aspect('equal', adjustable='box')
 ax4.grid(True, linestyle=':', alpha=0.5)
+ax4.tick_params(labelsize=10)
 
-# 5. VISTA DALL'ALTO X-Z (PIANTA MECCANICA CON SORMONTO DISTINTO E BRACCI A SBALZO)
+# 5. VISTA DALL'ALTO X-Z (PIANTA MECCANICA A TUTTA ALTEZZA)
 for idx_p in range(n_piastra):
     z0_p = idx_p * (s_piastra + d_piastra)
-    ax5.add_patch(patches.Rectangle((0, z0_p), B_piastra, s_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.1))
+    ax5.add_patch(patches.Rectangle((0, z0_p), B_piastra, s_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.2))
 
-# Connettori Powerlock visti dall'alto (-Z)
 x_pl_unici = sorted(set(xp for (xp, _) in res["coords_pl"]))
 for xp in x_pl_unici:
-    ax5.add_patch(patches.Rectangle((xp - diam_pl / 2.0, -prof_pl_disegno), diam_pl, prof_pl_disegno, facecolor='#333333', edgecolor='black', linewidth=0.9))
+    ax5.add_patch(patches.Rectangle((xp - diam_pl / 2.0, -prof_pl_disegno), diam_pl, prof_pl_disegno, facecolor='#333333', edgecolor='black', linewidth=1.0))
 
 for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'green', p_B, res["I_B"])):
     L_dis = min(cfg["L"], L_DRAW_MAX)
@@ -650,43 +656,41 @@ for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'gr
     for idx_b in range(cfg["n"]):
         off_z = idx_b * (cfg["s"] + cfg["d"])
 
-        # 1. FLANGIA DI SORMONTO ADERENTE ALLA PIASTRA (Z da spess_tot_p a spess_tot_p + s_b)
+        # Piede di sormonto aderente alla faccia piastra (evidenziato con puntinatura)
         ax5.add_patch(patches.Rectangle(
             (x_sorm_start, spess_tot_p + off_z), cfg["dx"], cfg["s"],
             facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
         ))
 
-        # 2. ALA A SBALZO CHE PROSEGUE VERSO IL QUADRO (+Z)
+        # Braccio a sbalzo verso l'interno del quadro (+Z)
         if cfg["orient"] == MODO_ORIZZ:
-            # Piatto orizzontale: ala a sbalzo larga quanto il piatto (w = dx)
             ax5.add_patch(patches.Rectangle(
                 (x_sorm_start, spess_tot_p + cfg["s"] + off_z), cfg["dx"], L_dis,
-                facecolor='#e68a00', edgecolor='black', linewidth=1.0, alpha=0.75
+                facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.75
             ))
         else:
-            # Piatto verticale (90°): ala a sbalzo spessa s_b posizionata sul bordo x_ala
             x_ala_start = cfg["x_ala"] - cfg["s"] / 2.0
             ax5.add_patch(patches.Rectangle(
                 (x_ala_start, spess_tot_p + cfg["s"] + off_z), cfg["s"], L_dis,
-                facecolor='#e68a00', edgecolor='black', linewidth=1.0, hatch='//'
+                facecolor='#e68a00', edgecolor='black', linewidth=1.1, hatch='//'
             ))
 
     x_testo = cfg["x_sorm"] if cfg["orient"] == MODO_ORIZZ else cfg["x_ala"]
     ax5.text(
-        x_testo, spess_tot_p + cfg["s"] + L_dis + 10,
+        x_testo, spess_tot_p + L_dis + 10,
         f"{cfg['id']} ({cfg['n']}x)\n{corr_ramo:.0f} A ({pc:.1f}%)",
-        color=colore, fontsize=8, weight='bold', ha='center', va='bottom'
+        color=colore, fontsize=9.5, weight='bold', ha='center', va='bottom'
     )
 
 ax5.axvline(0, color='gray', linestyle=':', linewidth=0.8)
 ax5.axvline(B_piastra, color='gray', linestyle=':', linewidth=0.8)
-ax5.set_title("5. Pianta Meccanica X-Z (Con Sormonto)", fontsize=10, weight='bold')
-ax5.set_xlabel("Larghezza X [mm]")
-ax5.set_ylabel("Profondità Z [mm]")
+ax5.set_title("5. Pianta Meccanica X-Z (Con Sormonto)", fontsize=12, weight='bold')
+ax5.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
+ax5.set_ylabel("Profondità Z [mm]", fontsize=11, weight='bold')
 ax5.set_xlim(-20, B_piastra + 20)
 ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 150)
-ax5.set_aspect('equal', adjustable='box')
 ax5.grid(True, linestyle=':', alpha=0.5)
+ax5.tick_params(labelsize=10)
 
 plt.tight_layout()
 st.pyplot(fig)
