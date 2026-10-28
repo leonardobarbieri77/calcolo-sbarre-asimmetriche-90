@@ -159,8 +159,8 @@ def calcola_portata_accoppiata(h, s, n, d, giacitura_costa, metallo_str, freq, t
 
 st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar")
 st.markdown(
-    "Solutore alle differenze finite (2D FDM) con verifiche **DIN 43671 / Melsom & Booth (Rev. 2.1)** "
-    "e proiezione d'ingombro a tutta altezza (**Sezione Laterale $Y\\text{-}Z$** e **Pianta Meccanica $X\\text{-}Z$**)."
+    "Solutore alle differenze finite (2D FDM) con verifiche **DIN 43671 / Melsom & Booth (Rev. 2.1)**, "
+    "proiezioni isometriche frontali $1:1$ e layout meccanico a tutta altezza (**Sezione Laterale $Y\\text{-}Z$** e **Pianta $X\\text{-}Z$**)."
 )
 
 # ==============================================================================
@@ -522,10 +522,10 @@ col4.metric(
 st.markdown("---")
 
 # ==============================================================================
-# 6. DASHBOARD GRAFICA A 5 VISTE A TUTTA ALTEZZA (TIPOGRAFIA POTENZIATA)
+# 6. DASHBOARD GRAFICA A 5 VISTE (ISOMETRIA 1:1 SU 1 E 2, TUTTA ALTEZZA SU 3, 4, 5)
 # ==============================================================================
 fig = plt.figure(figsize=(26, 10))
-gs = fig.add_gridspec(1, 5, width_ratios=[1.15, 1.15, 0.95, 0.85, 1.05])
+gs = fig.add_gridspec(1, 5, width_ratios=[1.0, 1.0, 0.95, 0.85, 1.05])
 
 ax1 = fig.add_subplot(gs[0, 0])
 ax2 = fig.add_subplot(gs[0, 1])
@@ -552,7 +552,7 @@ def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
     )
 
 
-# 1. MAPPA DENSITÀ |J|
+# 1. MAPPA DENSITÀ |J| (ISOMETRICA 1:1 CON adjustable='box' PER CERCHI POWERLOCK PERFETTI)
 im1 = ax1.pcolormesh(res["X"], res["Y"], res["J_mag"], shading='auto', cmap='inferno', vmin=0, vmax=max(mb_piastra["J_amm"] * 1.3, J_99_piastra))
 cbar1 = fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
 cbar1.set_label("Densità |J| [A/mm²]", fontsize=11, weight='bold')
@@ -567,9 +567,10 @@ ax1.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
 ax1.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax1.set_xlim(0, B_piastra)
 ax1.set_ylim(0, H_piastra)
+ax1.set_aspect('equal', adjustable='box')
 ax1.tick_params(labelsize=10)
 
-# 2. MAPPA POTENZIALE ELETTRICO V [mV]
+# 2. MAPPA POTENZIALE ELETTRICO V [mV] (ISOMETRICA 1:1)
 im2 = ax2.pcolormesh(res["X"], res["Y"], res["V_mV"], shading='auto', cmap='viridis')
 cbar2 = fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
 cbar2.set_label("Potenziale [mV]", fontsize=11, weight='bold')
@@ -583,9 +584,10 @@ ax2.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
 ax2.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax2.set_xlim(0, B_piastra)
 ax2.set_ylim(0, H_piastra)
+ax2.set_aspect('equal', adjustable='box')
 ax2.tick_params(labelsize=10)
 
-# 3. FLUSSO ASSIALE VERTICALE |Iy|
+# 3. FLUSSO ASSIALE VERTICALE |Iy| (A TUTTA ALTEZZA)
 ax3.plot(np.abs(res["profilo_Iy"]), res["y"], color='#d95f02', linewidth=2.4, label="|Iy(y)| in piastra")
 ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.4, label=f"Centro A ({cfg_A['y_sorm']:.0f} mm)")
 ax3.axhline(cfg_B["y_sorm"], color='green', linestyle='--', linewidth=1.4, label=f"Centro B ({cfg_B['y_sorm']:.0f} mm)")
@@ -613,9 +615,7 @@ for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'gr
     y_bot = cfg["y_sorm"] - cfg["dy"] / 2.0
     for idx_b in range(cfg["n"]):
         off_b = idx_b * (cfg["s"] + cfg["d"])
-        # Sormonto aderente alla piastra
         ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#d9822b', edgecolor='black', linewidth=1.2))
-        # Ala a sbalzo lungo Z
         if cfg["orient"] == MODO_ORIZZ:
             ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, cfg["y_ala"] - cfg["s"] / 2.0), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.1))
         else:
@@ -656,13 +656,11 @@ for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'gr
     for idx_b in range(cfg["n"]):
         off_z = idx_b * (cfg["s"] + cfg["d"])
 
-        # Piede di sormonto aderente alla faccia piastra (evidenziato con puntinatura)
         ax5.add_patch(patches.Rectangle(
             (x_sorm_start, spess_tot_p + off_z), cfg["dx"], cfg["s"],
             facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
         ))
 
-        # Braccio a sbalzo verso l'interno del quadro (+Z)
         if cfg["orient"] == MODO_ORIZZ:
             ax5.add_patch(patches.Rectangle(
                 (x_sorm_start, spess_tot_p + cfg["s"] + off_z), cfg["dx"], L_dis,
