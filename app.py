@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="LOADBANK-MASTER | Busbar 2D FDM + Layout 3D (Y-Z / X-Z)",
+    page_title="LOADBANK-MASTER | Busbar 2D FDM + DFM Layout",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -159,7 +159,7 @@ def calcola_portata_accoppiata(h, s, n, d, giacitura_costa, metallo_str, freq, t
 
 st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar")
 st.markdown(
-    "Solutore numerico alle differenze finite (2D FDM) con verifiche **DIN 43671 / Melsom & Booth (Rev. 2.1)** "
+    "Solutore alle differenze finite (2D FDM) con verifiche **DIN 43671 / Melsom & Booth (Rev. 2.1)** "
     "e proiezione d'ingombro completa in scala 1:1 (**Sezione Laterale $Y\\text{-}Z$** e **Pianta Meccanica $X\\text{-}Z$**)."
 )
 
@@ -235,23 +235,38 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
         )
         giacitura_ala_costa = True
 
-    if dx_sorm > B_piastra or dy_sorm > H_piastra:
-        st.error(f"Errore geometrico Barra {id_barra}: L'impronta ({dx_sorm:.0f}x{dy_sorm:.0f} mm) supera la piastra ({B_piastra:.0f}x{H_piastra:.0f} mm).")
+    if dx_sorm > B_piastra:
+        st.error(f"Errore geometrico Barra {id_barra}: La larghezza impronta ({dx_sorm:.0f} mm) supera la larghezza piastra ({B_piastra:.0f} mm).")
+        st.stop()
+    if dy_sorm > H_piastra:
+        st.error(f"Errore geometrico Barra {id_barra}: L'altezza impronta ({dy_sorm:.0f} mm) supera l'altezza piastra ({H_piastra:.0f} mm).")
         st.stop()
 
-    min_x, max_x = dx_sorm / 2.0, B_piastra - dx_sorm / 2.0
-    min_y, max_y = dy_sorm / 2.0, H_piastra - dy_sorm / 2.0
+    min_x = dx_sorm / 2.0
+    max_x = B_piastra - dx_sorm / 2.0
+    min_y = dy_sorm / 2.0
+    max_y = H_piastra - dy_sorm / 2.0
 
-    x_sorm = st.sidebar.slider(
-        f"Quota X Centro Sormonto Barra {id_barra} [mm]",
-        min_value=float(min_x), max_value=float(max_x),
-        value=float(min(max(x_def, min_x), max_x)), step=5.0, key=f"xs_{id_barra}"
-    )
-    y_sorm = st.sidebar.slider(
-        f"Quota Y Centro Sormonto Barra {id_barra} [mm]",
-        min_value=float(min_y), max_value=float(max_y),
-        value=float(min(max(y_def, min_y), max_y)), step=5.0, key=f"ys_{id_barra}"
-    )
+    # RISOLUZIONE DEL BUG QUANDO w_b == B_piastra: SE min_x >= max_x SI ASSEGNA IL CENTRO FISSO
+    if min_x >= max_x:
+        x_sorm = float(B_piastra / 2.0)
+        st.sidebar.info(f"Quota X Centro Barra {id_barra}: **{x_sorm:.1f} mm** (centrata a tutta larghezza)")
+    else:
+        x_sorm = st.sidebar.slider(
+            f"Quota X Centro Sormonto Barra {id_barra} [mm]",
+            min_value=float(min_x), max_value=float(max_x),
+            value=float(min(max(x_def, min_x), max_x)), step=5.0, key=f"xs_{id_barra}"
+        )
+
+    if min_y >= max_y:
+        y_sorm = float(H_piastra / 2.0)
+        st.sidebar.info(f"Quota Y Centro Barra {id_barra}: **{y_sorm:.1f} mm** (centrata a tutta altezza)")
+    else:
+        y_sorm = st.sidebar.slider(
+            f"Quota Y Centro Sormonto Barra {id_barra} [mm]",
+            min_value=float(min_y), max_value=float(max_y),
+            value=float(min(max(y_def, min_y), max_y)), step=5.0, key=f"ys_{id_barra}"
+        )
 
     if orient == MODO_ORIZZ:
         x_ala = x_sorm
@@ -508,7 +523,7 @@ col4.metric(
 st.markdown("---")
 
 # ==============================================================================
-# 6. DASHBOARD GRAFICA A 5 VISTE IN SCALA REALE 1:1 (INCLUSA VISTA DALL'ALTO X-Z)
+# 6. DASHBOARD GRAFICA A 5 VISTE IN SCALA REALE 1:1 (INCLUSA PIANTA MECCANICA X-Z)
 # ==============================================================================
 fig = plt.figure(figsize=(26, 10))
 gs = fig.add_gridspec(1, 5, width_ratios=[1.15, 1.15, 0.95, 0.95, 1.15])
@@ -578,10 +593,11 @@ ax3.set_ylim(0, H_piastra)
 ax3.grid(True, linestyle='--', alpha=0.5)
 ax3.legend(loc='upper right', fontsize=8)
 
-# 4. PROIEZIONE LATERALE Y-Z
+# 4. PROIEZIONE LATERALE Y-Z (CON SORMONTO SULLA FACCIA PIASTRA + BRACCIO A SBALZO)
 L_DRAW_MAX = 150.0
 prof_pl_disegno = diam_pl * 1.4
 spess_tot_p = n_piastra * s_piastra + (n_piastra - 1) * d_piastra
+
 for idx_p in range(n_piastra):
     z0_p = idx_p * (s_piastra + d_piastra)
     ax4.add_patch(patches.Rectangle((z0_p, 0), s_piastra, H_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.1))
@@ -591,11 +607,14 @@ for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'gr
     y_bot = cfg["y_sorm"] - cfg["dy"] / 2.0
     for idx_b in range(cfg["n"]):
         off_b = idx_b * (cfg["s"] + cfg["d"])
-        ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.0))
+        # Sormonto aderente alla faccia piastra (Z in [spess_tot_p, spess_tot_p + s])
+        ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#d9822b', edgecolor='black', linewidth=1.1))
+        # Braccio a sbalzo lungo Z (da spess_tot_p + s verso destra)
         if cfg["orient"] == MODO_ORIZZ:
-            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"], cfg["y_ala"] - cfg["s"] / 2.0 + off_b), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.0))
+            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, cfg["y_ala"] - cfg["s"] / 2.0), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.0))
         else:
             ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, y_bot), L_dis, cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.0, alpha=0.55, hatch='//'))
+
     y_testo = cfg["y_ala"] if cfg["orient"] == MODO_ORIZZ else cfg["y_sorm"]
     ax4.text(
         spess_tot_p + cfg["s"] + L_dis + 10, y_testo,
@@ -614,42 +633,58 @@ ax4.set_ylim(0, H_piastra)
 ax4.set_aspect('equal', adjustable='box')
 ax4.grid(True, linestyle=':', alpha=0.5)
 
-# 5. VISTA DALL'ALTO X-Z (PIANTA MECCANICA)
+# 5. VISTA DALL'ALTO X-Z (PIANTA MECCANICA CON SORMONTO DISTINTO E BRACCI A SBALZO)
 for idx_p in range(n_piastra):
     z0_p = idx_p * (s_piastra + d_piastra)
     ax5.add_patch(patches.Rectangle((0, z0_p), B_piastra, s_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.1))
 
-# Disegno Powerlock sul retro (-Z) visti dall'alto
+# Connettori Powerlock visti dall'alto (-Z)
 x_pl_unici = sorted(set(xp for (xp, _) in res["coords_pl"]))
 for xp in x_pl_unici:
     ax5.add_patch(patches.Rectangle((xp - diam_pl / 2.0, -prof_pl_disegno), diam_pl, prof_pl_disegno, facecolor='#333333', edgecolor='black', linewidth=0.9))
 
 for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'green', p_B, res["I_B"])):
     L_dis = min(cfg["L"], L_DRAW_MAX)
-    x_bot = cfg["x_sorm"] - cfg["dx"] / 2.0
+    x_sorm_start = cfg["x_sorm"] - cfg["dx"] / 2.0
 
-    if cfg["orient"] == MODO_ORIZZ:
-        # Piatto orizzontale: in pianta si vede la larghezza w = dx e la lunghezza a sbalzo L in +Z
-        for idx_b in range(cfg["n"]):
-            off_z = idx_b * (cfg["s"] + cfg["d"])
-            ax5.add_patch(patches.Rectangle((x_bot, spess_tot_p + off_z), cfg["dx"], L_dis, facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.75))
-        ax5.text(cfg["x_sorm"], spess_tot_p + L_dis + 10, f"{cfg['id']} ({cfg['n']}x, 0°)\n{corr_ramo:.0f} A ({pc:.1f}%)", color=colore, fontsize=8, weight='bold', ha='center', va='bottom')
-    else:
-        # Piatto verticale (90°): in pianta si vede lo spessore s lungo X e la lunghezza a sbalzo L in +Z
-        for idx_b in range(cfg["n"]):
-            off_b = idx_b * (cfg["s"] + cfg["d"])
-            x_ala_b = cfg["x_ala"] - cfg["s"] / 2.0 + off_b
-            ax5.add_patch(patches.Rectangle((x_ala_b, spess_tot_p), cfg["s"], L_dis, facecolor='#e68a00', edgecolor='black', linewidth=1.1, hatch='//'))
-        ax5.text(cfg["x_ala"], spess_tot_p + L_dis + 10, f"{cfg['id']} ({cfg['n']}x, 90°)\n{corr_ramo:.0f} A ({pc:.1f}%)", color=colore, fontsize=8, weight='bold', ha='center', va='bottom')
+    for idx_b in range(cfg["n"]):
+        off_z = idx_b * (cfg["s"] + cfg["d"])
 
-# Quota ingombro laterale
+        # 1. FLANGIA DI SORMONTO ADERENTE ALLA PIASTRA (Z da spess_tot_p a spess_tot_p + s_b)
+        ax5.add_patch(patches.Rectangle(
+            (x_sorm_start, spess_tot_p + off_z), cfg["dx"], cfg["s"],
+            facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
+        ))
+
+        # 2. ALA A SBALZO CHE PROSEGUE VERSO IL QUADRO (+Z)
+        if cfg["orient"] == MODO_ORIZZ:
+            # Piatto orizzontale: ala a sbalzo larga quanto il piatto (w = dx)
+            ax5.add_patch(patches.Rectangle(
+                (x_sorm_start, spess_tot_p + cfg["s"] + off_z), cfg["dx"], L_dis,
+                facecolor='#e68a00', edgecolor='black', linewidth=1.0, alpha=0.75
+            ))
+        else:
+            # Piatto verticale (90°): ala a sbalzo spessa s_b posizionata sul bordo x_ala
+            x_ala_start = cfg["x_ala"] - cfg["s"] / 2.0
+            ax5.add_patch(patches.Rectangle(
+                (x_ala_start, spess_tot_p + cfg["s"] + off_z), cfg["s"], L_dis,
+                facecolor='#e68a00', edgecolor='black', linewidth=1.0, hatch='//'
+            ))
+
+    x_testo = cfg["x_sorm"] if cfg["orient"] == MODO_ORIZZ else cfg["x_ala"]
+    ax5.text(
+        x_testo, spess_tot_p + cfg["s"] + L_dis + 10,
+        f"{cfg['id']} ({cfg['n']}x)\n{corr_ramo:.0f} A ({pc:.1f}%)",
+        color=colore, fontsize=8, weight='bold', ha='center', va='bottom'
+    )
+
 ax5.axvline(0, color='gray', linestyle=':', linewidth=0.8)
 ax5.axvline(B_piastra, color='gray', linestyle=':', linewidth=0.8)
-ax5.set_title("5. Pianta Meccanica X-Z (Vista dall'Alto)", fontsize=10, weight='bold')
+ax5.set_title("5. Pianta Meccanica X-Z (Con Sormonto)", fontsize=10, weight='bold')
 ax5.set_xlabel("Larghezza X [mm]")
 ax5.set_ylabel("Profondità Z [mm]")
 ax5.set_xlim(-20, B_piastra + 20)
-ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 140)
+ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 150)
 ax5.set_aspect('equal', adjustable='box')
 ax5.grid(True, linestyle=':', alpha=0.5)
 
