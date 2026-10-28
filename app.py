@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="LOADBANK-MASTER | Busbar 2D FDM + Verifica Melsom & Booth Rev. 2.1",
+    page_title="LOADBANK-MASTER | Busbar 2D FDM + Layout 3D (Y-Z / X-Z)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -53,18 +53,26 @@ VENTILAZIONE_K4 = {
 }
 
 SUPERFICIE_K5 = {
-    "Barre grezze di estrusione o trafilatura (emissività ~0,4) (K5 = 1,00)": "grezza",
+    "Barre grezze di estrusione o trafilatura (emissività ~0,4)": "grezza",
     "Barre verniciate opache o con termorestringente nero (emissività ~0,9)": "verniciata",
 }
 
-MODO_ORIZZ = "Orizzontale (0° - Piega lungo X)"
-MODO_VERT = "Verticale (90° - Piega lungo Y)"
+FORMA_K6 = {
+    "Normale (piatti rettangolari) (K6 = 1,00)": 1.00,
+    "Profili C o L accoppiati interni - dist. 1/4 h (K6 = 1,35)": 1.35,
+    "Profili C accoppiati esterni - dist. 1/4 h (K6 = 1,43)": 1.43,
+}
+
+K7_BASE_TABLE = {1: 1.00, 2: 1.79, 3: 2.45, 4: 3.10, 5: 3.70, 6: 4.30}
+
+MODO_ORIZZ = "Orizzontale (0° - Piega lungo X, ala di piatto)"
+MODO_VERT = "Verticale (90° - Piega lungo Y, ala di costa)"
 
 
 # ==============================================================================
-# 2. MOTORE DI PORTATA AMMISSIBILE MELSOM & BOOTH (DA TELEMA REV. 2.1)
+# 2. MOTORE COMPLETO MELSOM & BOOTH (TELEMA REV. 2.1)
 # ==============================================================================
-def calcola_portata_melsom_booth(h, s, metallo_str, freq, t_amb, dt, vent_str, sup_str, giacitura_costa=True):
+def calcola_portata_accoppiata(h, s, n, d, giacitura_costa, metallo_str, freq, t_amb, dt, vent_str, sup_str, forma_str):
     mat = METALLI_K1[metallo_str]
     k1 = mat["K1"]
 
@@ -78,11 +86,42 @@ def calcola_portata_melsom_booth(h, s, metallo_str, freq, t_amb, dt, vent_str, s
     k3_map = {30: 0.86, 40: 1.00, 50: 1.14, 65: 1.38}
     k3 = k3_map.get(dt, 0.0148 * dt + 0.4086)
     k4 = VENTILAZIONE_K4[vent_str]
+    k6 = FORMA_K6[forma_str]
+    is_profilo_cl = k6 > 1.00
     is_alluminio = "Alluminio" in metallo_str or "alluminio" in metallo_str
-    k5 = 1.00 if SUPERFICIE_K5[sup_str] == "grezza" else (1.12 if is_alluminio else 1.08)
-    k6 = 1.00
-    k7 = 1.00
-    k8 = 1.00 if giacitura_costa else 0.86
+
+    if SUPERFICIE_K5[sup_str] == "grezza":
+        k5 = 1.00
+    else:
+        k5 = (1.20 if is_alluminio else 1.12) if is_profilo_cl else (1.12 if is_alluminio else 1.08)
+
+    if giacitura_costa:
+        k8 = 1.00
+    else:
+        k8_map = {1: 0.86, 2: 0.80, 3: 0.74, 4: 0.68}
+        k8 = k8_map.get(n, max(0.50, 0.86 - 0.06 * (n - 1)))
+
+    p_1 = 2.0 * (h + s)
+    sez_1 = float(h * s)
+    sez_tot = float(h * s * n)
+
+    if n == 1:
+        k7 = 1.00
+        s_eff = float(s)
+    else:
+        r_hs = h / s
+        cr = 0.95 if r_hs <= 5.0 else (1.05 if r_hs >= 20.0 else 1.00)
+        k7_std = K7_BASE_TABLE[n] * cr
+        k7_att = ((h + n * s) / (h + s)) ** 0.39 * math.sqrt(n)
+        if d <= 0:
+            k7 = k7_att
+            s_eff = float(s * n)
+        elif d <= s:
+            k7 = k7_att + (d / s) * (k7_std - k7_att)
+            s_eff = float(s * n) - (d / s) * float(s * (n - 1))
+        else:
+            k7 = k7_std + min(1.0, (d - s) / max(1.0, h - s)) * (0.95 * n - k7_std)
+            s_eff = float(s)
 
     mu = 4.0 * math.pi * 1e-7 * mat["mu_r"]
     if freq <= 0:
@@ -90,8 +129,8 @@ def calcola_portata_melsom_booth(h, s, metallo_str, freq, t_amb, dt, vent_str, s
         k9 = 1.00
     else:
         skin_depth = 1000.0 * math.sqrt(2.0 * 1e-6 * mat["rho"] / (2.0 * math.pi * freq * mu))
-        lato_mag = max(float(h), float(s))
-        lato_min = min(float(h), float(s))
+        lato_mag = max(float(h), s_eff)
+        lato_min = min(float(h), s_eff)
         area_eq = lato_min * (lato_mag - lato_min) + math.pi * (lato_min ** 2) / 4.0
         num = (
             (2.0 * (lato_mag - lato_min) + math.pi * lato_min - 2.0 * math.pi * skin_depth)
@@ -107,28 +146,27 @@ def calcola_portata_melsom_booth(h, s, metallo_str, freq, t_amb, dt, vent_str, s
             pref = math.sqrt(2.0 * skin_depth / area_eq)
             k9 = max(0.10, min(1.00, pref * num / math.sqrt(den_rad)))
 
-    p_1 = 2.0 * (h + s)
-    sez_1 = float(h * s)
     k_tot = k1 * k2 * k3 * k4 * k5 * k6 * k7 * k8 * k9
     i_amm = 5.0 * k_tot * (p_1 ** 0.39) * (sez_1 ** 0.5)
-    j_amm = i_amm / sez_1
+    j_amm = i_amm / sez_tot
 
     return {
-        "I_amm": i_amm, "J_amm": j_amm, "K_tot": k_tot,
-        "K1": k1, "K2": k2, "K3": k3, "K4": k4, "K5": k5, "K8": k8, "K9": k9, "skin": skin_depth
+        "I_amm": i_amm, "J_amm": j_amm, "sez_tot": sez_tot, "s_eff": s_eff,
+        "K1": k1, "K2": k2, "K3": k3, "K4": k4, "K5": k5, "K6": k6,
+        "K7": k7, "K8": k8, "K9": k9, "K_tot": k_tot, "skin": skin_depth
     }
 
 
-st.title("⚡ LOADBANK-MASTER | Ripartizione 2D Powerlock + Verifica Melsom & Booth (Rev. 2.1)")
+st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar")
 st.markdown(
-    "Solutore alle differenze finite (2D FDM) per piastre collettrice con **criteri di accettabilità termoelettrica "
-    "unificati al calcolatore Telema Busbar Rev. 2.1** (`DIN 43671` / `Melsom & Booth` $I_{\\text{amm}} = 5 \\cdot K_{\\text{tot}} \\cdot P^{0,39} \\cdot S^{0,5}$)."
+    "Solutore numerico alle differenze finite (2D FDM) con verifiche **DIN 43671 / Melsom & Booth (Rev. 2.1)** "
+    "e proiezione d'ingombro completa in scala 1:1 (**Sezione Laterale $Y\\text{-}Z$** e **Pianta Meccanica $X\\text{-}Z$**)."
 )
 
 # ==============================================================================
-# 3. BARRA LATERALE DI CONTROLLO PARAMETRI
+# 3. PANNELLO DI CONTROLLO LATERALE
 # ==============================================================================
-st.sidebar.header("1. Materiale e Condizioni Ambientali (Rev. 2.1)")
+st.sidebar.header("1. Materiale e Termofluidodinamica (Rev. 2.1)")
 mat_scelto = st.sidebar.selectbox("Lega Conduttrice (K1)", list(METALLI_K1.keys()), index=0)
 dati_mat = METALLI_K1[mat_scelto]
 
@@ -137,19 +175,22 @@ tamb_in = st.sidebar.selectbox("Temperatura Ambiente Tamb [°C] (K2)", options=[
 dt_in = st.sidebar.selectbox("Sovratemperatura Ammessa DT [K] (K3)", options=[25, 30, 35, 40, 45, 50, 55, 60, 65, 70], index=5)
 vent_in = st.sidebar.selectbox("Regime di Ventilazione (K4)", options=list(VENTILAZIONE_K4.keys()), index=0)
 sup_in = st.sidebar.selectbox("Stato Superficie (K5)", options=list(SUPERFICIE_K5.keys()), index=0)
+forma_in = st.sidebar.selectbox("Geometria Profilato Barre Uscita (K6)", options=list(FORMA_K6.keys()), index=0)
 
 T_regime = tamb_in + dt_in
 rho_caldo = dati_mat["rho"] * (1.0 + dati_mat["alpha"] * (T_regime - 20.0))
 
 st.sidebar.caption(
-    f"**Parametri Operativi:** $K_1$ = **{dati_mat['K1']:.2f}** | $T_{{\\text{{regime}}}}$ = **{T_regime} °C** | "
+    f"**Regime Termico:** $T_{{\\text{{regime}}}}$ = **{T_regime} °C** | "
     f"$\\rho({T_regime}\\text{{ °C}})$ = **{rho_caldo:.4f} µΩ·m**"
 )
 
 st.sidebar.header("2. Piastra Collettrice e Powerlock")
-B_piastra = st.sidebar.number_input("Larghezza Piastra B [mm]", min_value=50.0, max_value=1500.0, value=200.0, step=10.0)
+B_piastra = st.sidebar.number_input("Larghezza Piastra B [mm]", min_value=50.0, max_value=1500.0, value=250.0, step=10.0)
 H_piastra = st.sidebar.number_input("Altezza Piastra H [mm]", min_value=200.0, max_value=3000.0, value=1000.0, step=50.0)
-s_piastra = st.sidebar.number_input("Spessore Piastra s [mm]", min_value=3.0, max_value=30.0, value=10.0, step=1.0)
+s_piastra = st.sidebar.number_input("Spessore Singola Piastra s [mm]", min_value=3.0, max_value=30.0, value=10.0, step=1.0)
+n_piastra = st.sidebar.selectbox("Numero Piastre Accoppiate // (n_P)", options=[1, 2, 3, 4], index=0)
+d_piastra = 0.0 if n_piastra == 1 else st.sidebar.number_input("Distanza netta tra piastre d_P [mm]", min_value=0.0, max_value=100.0, value=10.0, step=1.0)
 
 I_totale = st.sidebar.number_input("Corrente Totale Iniettata [A]", min_value=100.0, max_value=40000.0, value=3600.0, step=100.0)
 X_col = st.sidebar.number_input("Colonne Powerlock (X)", min_value=1, max_value=10, value=2, step=1)
@@ -164,18 +205,23 @@ y_offset_pl = st.sidebar.number_input("Quota Y Prima Riga dal Basso [mm]", min_v
 diam_pl = st.sidebar.number_input("Diametro Impronta Powerlock [mm]", min_value=15.0, max_value=80.0, value=32.0, step=2.0)
 
 
-def configura_barra_sidebar(id_barra, y_def, orient_def_idx, lato_def_idx):
-    st.sidebar.header(f"3{id_barra}. Barra {id_barra} in Uscita")
+def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx):
+    st.sidebar.header(f"3{id_barra}. Ramo {id_barra} in Uscita")
     orient = st.sidebar.selectbox(f"Orientamento Barra {id_barra}", [MODO_ORIZZ, MODO_VERT], index=orient_def_idx, key=f"or_{id_barra}")
-    w_b = st.sidebar.number_input(f"Larghezza Barra {id_barra} (h_barra) [mm]", min_value=20.0, max_value=800.0, value=120.0, step=10.0, key=f"w_{id_barra}")
-    h_b = st.sidebar.number_input(f"Profondità Sormonto Barra {id_barra} [mm]", min_value=15.0, max_value=400.0, value=60.0, step=5.0, key=f"h_{id_barra}")
-    s_b = st.sidebar.number_input(f"Spessore Barra {id_barra} (s_barra) [mm]", min_value=3.0, max_value=30.0, value=10.0, step=1.0, key=f"s_{id_barra}")
-    L_b = st.sidebar.number_input(f"Lunghezza Ramo {id_barra} fino a Barra Equipotenziale [mm]", min_value=20.0, max_value=1500.0, value=120.0, step=10.0, key=f"L_{id_barra}")
+    n_b = st.sidebar.selectbox(f"Numero Sbarre in Parallelo ({id_barra})", options=[1, 2, 3, 4, 5, 6], index=0, key=f"n_{id_barra}")
+    d_b = 0.0 if n_b == 1 else st.sidebar.number_input(
+        f"Distanza netta d tra sbarre ({id_barra}) [mm]",
+        min_value=0.0, max_value=150.0, value=10.0, step=1.0, key=f"d_{id_barra}"
+    )
+    w_b = st.sidebar.number_input(f"Larghezza Barra {id_barra} (h) [mm]", min_value=20.0, max_value=800.0, value=120.0, step=10.0, key=f"w_{id_barra}")
+    h_b = st.sidebar.number_input(f"Profondità Sormonto {id_barra} [mm]", min_value=15.0, max_value=400.0, value=60.0, step=5.0, key=f"h_{id_barra}")
+    s_b = st.sidebar.number_input(f"Spessore Singola Barra {id_barra} (s) [mm]", min_value=3.0, max_value=30.0, value=10.0, step=1.0, key=f"s_{id_barra}")
+    L_b = st.sidebar.number_input(f"Lunghezza Ramo {id_barra} a sbalzo verso quadro [mm]", min_value=20.0, max_value=1500.0, value=120.0, step=10.0, key=f"L_{id_barra}")
 
     if orient == MODO_ORIZZ:
         dx_sorm, dy_sorm = w_b, h_b
         lato_piega = st.sidebar.selectbox(
-            f"Lato Piega d'Uscita Barra {id_barra}",
+            f"Bordo di stacco piega a sbalzo ({id_barra})",
             ["Bordo Inferiore del Sormonto", "Bordo Superiore del Sormonto"],
             index=lato_def_idx, key=f"lato_{id_barra}"
         )
@@ -183,14 +229,14 @@ def configura_barra_sidebar(id_barra, y_def, orient_def_idx, lato_def_idx):
     else:
         dx_sorm, dy_sorm = h_b, w_b
         lato_piega = st.sidebar.selectbox(
-            f"Lato Piega d'Uscita Barra {id_barra}",
+            f"Bordo di stacco piega a sbalzo ({id_barra})",
             ["Bordo Sinistro del Sormonto", "Bordo Destro del Sormonto"],
             index=lato_def_idx, key=f"lato_{id_barra}"
         )
         giacitura_ala_costa = True
 
     if dx_sorm > B_piastra or dy_sorm > H_piastra:
-        st.error(f"Errore geometrico Barra {id_barra}: L'impronta ({dx_sorm:.0f}x{dy_sorm:.0f} mm) supera le dimensioni della piastra ({B_piastra:.0f}x{H_piastra:.0f} mm).")
+        st.error(f"Errore geometrico Barra {id_barra}: L'impronta ({dx_sorm:.0f}x{dy_sorm:.0f} mm) supera la piastra ({B_piastra:.0f}x{H_piastra:.0f} mm).")
         st.stop()
 
     min_x, max_x = dx_sorm / 2.0, B_piastra - dx_sorm / 2.0
@@ -199,7 +245,7 @@ def configura_barra_sidebar(id_barra, y_def, orient_def_idx, lato_def_idx):
     x_sorm = st.sidebar.slider(
         f"Quota X Centro Sormonto Barra {id_barra} [mm]",
         min_value=float(min_x), max_value=float(max_x),
-        value=float(min(max(B_piastra / 2.0, min_x), max_x)), step=5.0, key=f"xs_{id_barra}"
+        value=float(min(max(x_def, min_x), max_x)), step=5.0, key=f"xs_{id_barra}"
     )
     y_sorm = st.sidebar.slider(
         f"Quota Y Centro Sormonto Barra {id_barra} [mm]",
@@ -215,15 +261,23 @@ def configura_barra_sidebar(id_barra, y_def, orient_def_idx, lato_def_idx):
         x_ala = (x_sorm - dx_sorm / 2.0 + s_b / 2.0) if "Sinistro" in lato_piega else (x_sorm + dx_sorm / 2.0 - s_b / 2.0)
 
     return {
-        "id": id_barra, "orient": orient, "w": w_b, "h": h_b, "s": s_b, "L": L_b,
+        "id": id_barra, "orient": orient, "n": n_b, "d": d_b,
+        "w": w_b, "h": h_b, "s": s_b, "L": L_b,
         "dx": dx_sorm, "dy": dy_sorm, "x_sorm": x_sorm, "y_sorm": y_sorm,
         "x_ala": x_ala, "y_ala": y_ala, "lato_piega": lato_piega,
         "costa": giacitura_ala_costa
     }
 
 
-cfg_A = configura_barra_sidebar("A", y_def=60.0, orient_def_idx=0, lato_def_idx=0)
-cfg_B = configura_barra_sidebar("B", y_def=500.0, orient_def_idx=0, lato_def_idx=1)
+cfg_A = configura_barra_sidebar("A", x_def=B_piastra / 2.0, y_def=60.0, orient_def_idx=0, lato_def_idx=0)
+cfg_B = configura_barra_sidebar("B", x_def=B_piastra / 2.0, y_def=500.0, orient_def_idx=0, lato_def_idx=1)
+
+st.sidebar.header("4. Mutuo Accoppiamento tra Ramo A e Ramo B")
+accoppia_AB = st.sidebar.checkbox(
+    "Accoppiamento termomagnetico A+B (se parallele)",
+    value=True,
+    help="Valuta il declassamento (K7, K8, K9) come coppia accoppiata alla distanza netta tra le due uscite."
+)
 
 # --- VERIFICHE GEOMETRICHE E COLLISIONE 2D ---
 x_min_pl = x_offset_pl - ((X_col - 1) * passo_x) / 2.0 - diam_pl / 2.0
@@ -243,27 +297,57 @@ xB1, xB2 = cfg_B["x_sorm"] - cfg_B["dx"] / 2.0, cfg_B["x_sorm"] + cfg_B["dx"] / 
 yB1, yB2 = cfg_B["y_sorm"] - cfg_B["dy"] / 2.0, cfg_B["y_sorm"] + cfg_B["dy"] / 2.0
 
 if (xA1 < xB2) and (xA2 > xB1) and (yA1 < yB2) and (yA2 > yB1):
-    errori_geom.append("Collisione meccanica 2D: Le impronte di sormonto della Barra A e della Barra B si sovrappongono!")
+    errori_geom.append("Collisione meccanica 2D: Le impronte di sormonto della Barra A e della Barra B si sovrappongono sulla piastra!")
 
 if errori_geom:
     for err in errori_geom:
         st.error(err)
     st.stop()
 
-# --- CALCOLO PORTATE AMMISSIBILI MELSOM & BOOTH (PIASTRA, BARRA A, BARRA B) ---
-mb_piastra = calcola_portata_melsom_booth(B_piastra, s_piastra, mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, giacitura_costa=True)
-mb_A = calcola_portata_melsom_booth(cfg_A["w"], cfg_A["s"], mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, giacitura_costa=cfg_A["costa"])
-mb_B = calcola_portata_melsom_booth(cfg_B["w"], cfg_B["s"], mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, giacitura_costa=cfg_B["costa"])
+# --- CALCOLO PORTATE AMMISSIBILI MELSOM & BOOTH (REV. 2.1) ---
+forma_normale = list(FORMA_K6.keys())[0]
+mb_piastra = calcola_portata_accoppiata(
+    B_piastra, s_piastra, n_piastra, d_piastra, True,
+    mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_normale
+)
+
+if accoppia_AB and cfg_A["n"] == 1 and cfg_B["n"] == 1 and cfg_A["orient"] == cfg_B["orient"]:
+    if cfg_A["orient"] == MODO_ORIZZ:
+        d_netta_AB = max(0.0, abs(cfg_B["y_ala"] - cfg_A["y_ala"]) - 0.5 * (cfg_A["s"] + cfg_B["s"]))
+    else:
+        d_netta_AB = max(0.0, abs(cfg_B["x_ala"] - cfg_A["x_ala"]) - 0.5 * (cfg_A["s"] + cfg_B["s"]))
+
+    mb_coppia_A = calcola_portata_accoppiata(
+        cfg_A["w"], cfg_A["s"], 2, d_netta_AB, cfg_A["costa"],
+        mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in
+    )
+    mb_coppia_B = calcola_portata_accoppiata(
+        cfg_B["w"], cfg_B["s"], 2, d_netta_AB, cfg_B["costa"],
+        mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in
+    )
+    mb_A = dict(mb_coppia_A, I_amm=mb_coppia_A["I_amm"] / 2.0, sez_tot=cfg_A["w"] * cfg_A["s"], nota_acc=f"Coppia A+B (d={d_netta_AB:.0f} mm)")
+    mb_B = dict(mb_coppia_B, I_amm=mb_coppia_B["I_amm"] / 2.0, sez_tot=cfg_B["w"] * cfg_B["s"], nota_acc=f"Coppia A+B (d={d_netta_AB:.0f} mm)")
+else:
+    mb_A = calcola_portata_accoppiata(
+        cfg_A["w"], cfg_A["s"], cfg_A["n"], cfg_A["d"], cfg_A["costa"],
+        mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in
+    )
+    mb_A["nota_acc"] = f"Fascio n={cfg_A['n']} (d={cfg_A['d']:.0f} mm)"
+    mb_B = calcola_portata_accoppiata(
+        cfg_B["w"], cfg_B["s"], cfg_B["n"], cfg_B["d"], cfg_B["costa"],
+        mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in
+    )
+    mb_B["nota_acc"] = f"Fascio n={cfg_B['n']} (d={cfg_B['d']:.0f} mm)"
 
 
 # ==============================================================================
-# 4. SOLUTORE ELETTRODINAMICO 2D FDM VETTORIALIZZATO
+# 4. SOLUTORE ELETTRODINAMICO 2D FDM
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def risolvi_busbar_2d(
-    B, H, s, rho_uohm_m, I_tot, n_col, n_row, px, py, x0_center_pl, y0_pl, d_pl,
-    xA1, xA2, yA1, yA2, wA, hA, sA, LA,
-    xB1, xB2, yB1, yB2, wB, hB, sB, LB
+    B, H, s_eff_p, rho_uohm_m, I_tot, n_col, n_row, px, py, x0_center_pl, y0_pl, d_pl,
+    xA1, xA2, yA1, yA2, wA, hA, sA, nA, k9A, LA,
+    xB1, xB2, yB1, yB2, wB, hB, sB, nB, k9B, LB
 ):
     rho = rho_uohm_m * 1e-3
     sigma = 1.0 / rho
@@ -277,8 +361,8 @@ def risolvi_busbar_2d(
     y_c = (np.arange(ny) + 0.5) * dy
     X, Y = np.meshgrid(x_c, y_c)
 
-    Gx = sigma * (s * dy) / dx
-    Gy = sigma * (s * dx) / dy
+    Gx = sigma * (s_eff_p * dy) / dx
+    Gy = sigma * (s_eff_p * dx) / dy
 
     N = nx * ny
     idx_grid = np.arange(N).reshape((ny, nx))
@@ -319,13 +403,13 @@ def risolvi_busbar_2d(
     if len(ind_B) == 0:
         ind_B = np.array([np.argmin((X - 0.5 * (xB1 + xB2)) ** 2 + (Y - 0.5 * (yB1 + yB2)) ** 2)])
 
-    R_att_A = rho * (0.5 * (s + sA)) / (wA * hA)
-    R_sorm_A = rho * hA / (3.0 * wA * sA)
-    R_A = R_att_A + R_sorm_A + rho * LA / (wA * sA)
+    R_att_A = rho * (0.5 * (s_eff_p + sA)) / (wA * hA * nA)
+    R_sorm_A = rho * hA / (3.0 * wA * sA * nA * (k9A ** 2))
+    R_A = R_att_A + R_sorm_A + (rho * LA) / (wA * sA * nA * (k9A ** 2))
 
-    R_att_B = rho * (0.5 * (s + sB)) / (wB * hB)
-    R_sorm_B = rho * hB / (3.0 * wB * sB)
-    R_B = R_att_B + R_sorm_B + rho * LB / (wB * sB)
+    R_att_B = rho * (0.5 * (s_eff_p + sB)) / (wB * hB * nB)
+    R_sorm_B = rho * hB / (3.0 * wB * sB * nB * (k9B ** 2))
+    R_B = R_att_B + R_sorm_B + (rho * LB) / (wB * sB * nB * (k9B ** 2))
 
     g_A = (1.0 / R_A) / len(ind_A)
     g_B = (1.0 / R_B) / len(ind_B)
@@ -353,7 +437,7 @@ def risolvi_busbar_2d(
     Jx = -sigma * dV_dx
     Jy = -sigma * dV_dy
     J_mag = np.sqrt(Jx ** 2 + Jy ** 2)
-    profilo_Iy = np.sum(Jy, axis=1) * dx * s
+    profilo_Iy = np.sum(Jy, axis=1) * dx * s_eff_p
 
     P_tot = float(I_vec @ V)
     P_ramo_A = (I_A ** 2) * R_A
@@ -370,21 +454,23 @@ def risolvi_busbar_2d(
     }
 
 
+s_cond_piastra = s_piastra * n_piastra * (mb_piastra["K9"] ** 2)
+
 res = risolvi_busbar_2d(
-    B_piastra, H_piastra, s_piastra, rho_caldo, I_totale,
+    B_piastra, H_piastra, s_cond_piastra, rho_caldo, I_totale,
     X_col, Y_row, passo_x, passo_y, x_offset_pl, y_offset_pl, diam_pl,
-    xA1, xA2, yA1, yA2, cfg_A["w"], cfg_A["h"], cfg_A["s"], cfg_A["L"],
-    xB1, xB2, yB1, yB2, cfg_B["w"], cfg_B["h"], cfg_B["s"], cfg_B["L"]
+    xA1, xA2, yA1, yA2, cfg_A["w"], cfg_A["h"], cfg_A["s"], cfg_A["n"], mb_A["K9"], cfg_A["L"],
+    xB1, xB2, yB1, yB2, cfg_B["w"], cfg_B["h"], cfg_B["s"], cfg_B["n"], mb_B["K9"], cfg_B["L"]
 )
 
 # ==============================================================================
-# 5. METRICHE KPI CONFRONTATE CON PORTATA MELSOM & BOOTH REV. 2.1
+# 5. SCHEDE KPI E VALORI STRATEGICI
 # ==============================================================================
 p_A = res["I_A"] / I_totale * 100.0
 p_B = res["I_B"] / I_totale * 100.0
-sez_A = cfg_A["w"] * cfg_A["s"]
-sez_B = cfg_B["w"] * cfg_B["s"]
-sez_piastra = B_piastra * s_piastra
+sez_A = mb_A["sez_tot"]
+sez_B = mb_B["sez_tot"]
+sez_piastra = mb_piastra["sez_tot"]
 
 J_L_A = res["I_A"] / sez_A
 J_L_B = res["I_B"] / sez_B
@@ -393,38 +479,45 @@ J_sez_piastra_max = I_sez_piastra_max / sez_piastra
 J_99_piastra = float(np.percentile(res["J_mag"], 99))
 P_tot = res["P_piastra"] + res["P_A"] + res["P_B"]
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric(
-    f"Corrente Barra A (Amm: {mb_A['I_amm']:.0f} A)",
-    f"{res['I_A']:.0f} A ({p_A:.1f}%)",
-    f"J = {J_L_A:.2f} A/mm² (J_amm = {mb_A['J_amm']:.2f} A/mm²)",
+col1, col2, col3, col4 = st.columns(4)
+col1.metric(
+    label=f"Ramo A (Amm: {mb_A['I_amm']:.0f} A | K7={mb_A['K7']:.2f})",
+    value=f"{res['I_A']:.0f} A ({p_A:.1f}%)",
+    delta=f"J = {J_L_A:.2f} A/mm² (J_amm = {mb_A['J_amm']:.2f} A/mm²)",
     delta_color="inverse" if res["I_A"] > mb_A["I_amm"] else "normal"
 )
-c2.metric(
-    f"Corrente Barra B (Amm: {mb_B['I_amm']:.0f} A)",
-    f"{res['I_B']:.0f} A ({p_B:.1f}%)",
-    f"J = {J_L_B:.2f} A/mm² (J_amm = {mb_B['J_amm']:.2f} A/mm²)",
+col2.metric(
+    label=f"Ramo B (Amm: {mb_B['I_amm']:.0f} A | K7={mb_B['K7']:.2f})",
+    value=f"{res['I_B']:.0f} A ({p_B:.1f}%)",
+    delta=f"J = {J_L_B:.2f} A/mm² (J_amm = {mb_B['J_amm']:.2f} A/mm²)",
     delta_color="inverse" if res["I_B"] > mb_B["I_amm"] else "normal"
 )
-c3.metric(
-    f"Max Sezione Piastra (Amm: {mb_piastra['I_amm']:.0f} A)",
-    f"{I_sez_piastra_max:.0f} A ({J_sez_piastra_max:.2f} A/mm²)",
-    f"J_amm Piastra = {mb_piastra['J_amm']:.2f} A/mm² (K1={dati_mat['K1']:.2f})",
+col3.metric(
+    label=f"Piastra (Amm: {mb_piastra['I_amm']:.0f} A | K7={mb_piastra['K7']:.2f})",
+    value=f"{I_sez_piastra_max:.0f} A ({J_sez_piastra_max:.2f} A/mm²)",
+    delta=f"J_amm Piastra = {mb_piastra['J_amm']:.2f} A/mm²",
     delta_color="inverse" if I_sez_piastra_max > mb_piastra["I_amm"] else "normal"
 )
-c4.metric(
-    f"Potenza Dissipata (a {T_regime} °C)",
-    f"{P_tot:.1f} watt",
-    f"Solo piastra: {res['P_piastra']:.1f} watt ({P_tot/1000.0:.2f} chilowatt)",
+col4.metric(
+    label=f"Potenza Dissipata (a {T_regime} °C)",
+    value=f"{P_tot:.1f} watt",
+    delta=f"Piastra: {res['P_piastra']:.1f} watt ({P_tot/1000.0:.2f} chilowatt tot)",
     delta_color="off"
 )
 
 st.markdown("---")
 
 # ==============================================================================
-# 6. VISUALIZZAZIONE 4 GRAFICI IN SCALA 1:1
+# 6. DASHBOARD GRAFICA A 5 VISTE IN SCALA REALE 1:1 (INCLUSA VISTA DALL'ALTO X-Z)
 # ==============================================================================
-fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(21, 10), gridspec_kw={'width_ratios': [1.15, 1.15, 1.0, 1.0]})
+fig = plt.figure(figsize=(26, 10))
+gs = fig.add_gridspec(1, 5, width_ratios=[1.15, 1.15, 0.95, 0.95, 1.15])
+
+ax1 = fig.add_subplot(gs[0, 0])
+ax2 = fig.add_subplot(gs[0, 1])
+ax3 = fig.add_subplot(gs[0, 2])
+ax4 = fig.add_subplot(gs[0, 3])
+ax5 = fig.add_subplot(gs[0, 4])
 
 
 def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
@@ -439,13 +532,13 @@ def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
         ax.plot([x_p, x_p], [y0, y0 + cfg["dy"]], color='#00ff00', linewidth=4.0)
     rot_tag = "0°" if cfg["orient"] == MODO_ORIZZ else "90°"
     ax.text(
-        cfg["x_sorm"], cfg["y_sorm"], f"{cfg['id']} ({rot_tag})\n{perc:.1f}%",
+        cfg["x_sorm"], cfg["y_sorm"], f"{cfg['id']} ({cfg['n']}x, {rot_tag})\n{perc:.1f}%",
         color='white', weight='bold', fontsize=8, ha='center', va='center',
         bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.75)
     )
 
 
-# 1. Mappa Densità |J|
+# 1. MAPPA DENSITÀ |J|
 im1 = ax1.pcolormesh(res["X"], res["Y"], res["J_mag"], shading='auto', cmap='inferno', vmin=0, vmax=max(mb_piastra["J_amm"] * 1.3, J_99_piastra))
 fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04, label="Densità |J| [A/mm²]")
 ax1.streamplot(res["x"], res["y"], res["Jx"], res["Jy"], color='cyan', linewidth=0.7, density=0.85, arrowsize=0.7)
@@ -453,14 +546,14 @@ for (xp, yp) in res["coords_pl"]:
     ax1.add_patch(patches.Circle((xp, yp), radius=diam_pl / 2.0, edgecolor='white', facecolor='none', linewidth=1.2))
 disegna_impronta_e_piega(ax1, cfg_A, p_A, 'cyan')
 disegna_impronta_e_piega(ax1, cfg_B, p_B, 'cyan')
-ax1.set_title("1. Densità |J| e Lato Piega (Verde)", fontsize=10, weight='bold')
+ax1.set_title("1. Densità |J| e Piega (Verde)", fontsize=10, weight='bold')
 ax1.set_xlabel("Larghezza X [mm]")
 ax1.set_ylabel("Quota Y [mm]")
 ax1.set_xlim(0, B_piastra)
 ax1.set_ylim(0, H_piastra)
 ax1.set_aspect('equal', adjustable='box')
 
-# 2. Mappa Potenziale V [mV]
+# 2. MAPPA POTENZIALE ELETTRICO V [mV]
 im2 = ax2.pcolormesh(res["X"], res["Y"], res["V_mV"], shading='auto', cmap='viridis')
 fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04, label="Potenziale [mV]")
 for (xp, yp) in res["coords_pl"]:
@@ -473,11 +566,11 @@ ax2.set_xlim(0, B_piastra)
 ax2.set_ylim(0, H_piastra)
 ax2.set_aspect('equal', adjustable='box')
 
-# 3. Flusso Assiale Verticale |Iy| con Portata Melsom & Booth Reale
+# 3. FLUSSO ASSIALE VERTICALE |Iy|
 ax3.plot(np.abs(res["profilo_Iy"]), res["y"], color='#d95f02', linewidth=2.2, label="|Iy(y)| in piastra")
-ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.3, label=f"Sormonto A (Y={cfg_A['y_sorm']:.0f} mm)")
-ax3.axhline(cfg_B["y_sorm"], color='green', linestyle='--', linewidth=1.3, label=f"Sormonto B (Y={cfg_B['y_sorm']:.0f} mm)")
-ax3.axvline(mb_piastra["I_amm"], color='red', linestyle=':', linewidth=1.8, label=f"I_amm Rev.2.1 ({mb_piastra['I_amm']:.0f} A)")
+ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.3, label=f"Centro A ({cfg_A['y_sorm']:.0f} mm)")
+ax3.axhline(cfg_B["y_sorm"], color='green', linestyle='--', linewidth=1.3, label=f"Centro B ({cfg_B['y_sorm']:.0f} mm)")
+ax3.axvline(mb_piastra["I_amm"], color='red', linestyle=':', linewidth=1.8, label=f"I_amm ({mb_piastra['I_amm']:.0f} A)")
 ax3.fill_betweenx(res["y"], 0, np.abs(res["profilo_Iy"]), color='#d95f02', alpha=0.2)
 ax3.set_title("3. Flusso Assiale |Iy| [A]", fontsize=10, weight='bold')
 ax3.set_xlabel("Corrente Assiale [A]")
@@ -485,74 +578,112 @@ ax3.set_ylim(0, H_piastra)
 ax3.grid(True, linestyle='--', alpha=0.5)
 ax3.legend(loc='upper right', fontsize=8)
 
-# 4. Proiezione Laterale Meccanica Y-Z
+# 4. PROIEZIONE LATERALE Y-Z
 L_DRAW_MAX = 150.0
 prof_pl_disegno = diam_pl * 1.4
-ax4.add_patch(patches.Rectangle((0, 0), s_piastra, H_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.2))
+spess_tot_p = n_piastra * s_piastra + (n_piastra - 1) * d_piastra
+for idx_p in range(n_piastra):
+    z0_p = idx_p * (s_piastra + d_piastra)
+    ax4.add_patch(patches.Rectangle((z0_p, 0), s_piastra, H_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.1))
+
 for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'green', p_B, res["I_B"])):
     L_dis = min(cfg["L"], L_DRAW_MAX)
     y_bot = cfg["y_sorm"] - cfg["dy"] / 2.0
-    ax4.add_patch(patches.Rectangle((s_piastra, y_bot), cfg["s"], cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.1))
-    if cfg["orient"] == MODO_ORIZZ:
-        ax4.add_patch(patches.Rectangle((s_piastra + cfg["s"], cfg["y_ala"] - cfg["s"] / 2.0), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.1))
-        y_testo = cfg["y_ala"]
-    else:
-        ax4.add_patch(patches.Rectangle((s_piastra + cfg["s"], y_bot), L_dis, cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.55, hatch='//'))
-        y_testo = cfg["y_sorm"]
+    for idx_b in range(cfg["n"]):
+        off_b = idx_b * (cfg["s"] + cfg["d"])
+        ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.0))
+        if cfg["orient"] == MODO_ORIZZ:
+            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"], cfg["y_ala"] - cfg["s"] / 2.0 + off_b), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.0))
+        else:
+            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, y_bot), L_dis, cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.0, alpha=0.55, hatch='//'))
+    y_testo = cfg["y_ala"] if cfg["orient"] == MODO_ORIZZ else cfg["y_sorm"]
     ax4.text(
-        s_piastra + cfg["s"] + L_dis + 8, y_testo,
-        f"{cfg['id']}: {pc:.1f}%\n({corr_ramo:.0f} A)\nL={cfg['L']:.0f} mm",
+        spess_tot_p + cfg["s"] + L_dis + 10, y_testo,
+        f"{cfg['id']} ({cfg['n']}x): {pc:.1f}%\n({corr_ramo:.0f} A)",
         color=colore, fontsize=8, weight='bold', va='center'
     )
+
 y_pl_unici = sorted(set(yp for (_, yp) in res["coords_pl"]))
 for yp in y_pl_unici:
     ax4.add_patch(patches.Rectangle((-prof_pl_disegno, yp - diam_pl / 2.0), prof_pl_disegno, diam_pl, facecolor='#333333', edgecolor='black', linewidth=0.9))
-ax4.set_title("4. Proiezione Laterale Y-Z", fontsize=10, weight='bold')
+
+ax4.set_title("4. Sezione Laterale Y-Z", fontsize=10, weight='bold')
 ax4.set_xlabel("Profondità Z [mm]")
-ax4.set_xlim(-prof_pl_disegno - 30, s_piastra + max(cfg_A["s"], cfg_B["s"]) + L_DRAW_MAX + 150)
+ax4.set_xlim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 160)
 ax4.set_ylim(0, H_piastra)
 ax4.set_aspect('equal', adjustable='box')
 ax4.grid(True, linestyle=':', alpha=0.5)
+
+# 5. VISTA DALL'ALTO X-Z (PIANTA MECCANICA)
+for idx_p in range(n_piastra):
+    z0_p = idx_p * (s_piastra + d_piastra)
+    ax5.add_patch(patches.Rectangle((0, z0_p), B_piastra, s_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.1))
+
+# Disegno Powerlock sul retro (-Z) visti dall'alto
+x_pl_unici = sorted(set(xp for (xp, _) in res["coords_pl"]))
+for xp in x_pl_unici:
+    ax5.add_patch(patches.Rectangle((xp - diam_pl / 2.0, -prof_pl_disegno), diam_pl, prof_pl_disegno, facecolor='#333333', edgecolor='black', linewidth=0.9))
+
+for cfg, colore, pc, corr_ramo in ((cfg_A, 'blue', p_A, res["I_A"]), (cfg_B, 'green', p_B, res["I_B"])):
+    L_dis = min(cfg["L"], L_DRAW_MAX)
+    x_bot = cfg["x_sorm"] - cfg["dx"] / 2.0
+
+    if cfg["orient"] == MODO_ORIZZ:
+        # Piatto orizzontale: in pianta si vede la larghezza w = dx e la lunghezza a sbalzo L in +Z
+        for idx_b in range(cfg["n"]):
+            off_z = idx_b * (cfg["s"] + cfg["d"])
+            ax5.add_patch(patches.Rectangle((x_bot, spess_tot_p + off_z), cfg["dx"], L_dis, facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.75))
+        ax5.text(cfg["x_sorm"], spess_tot_p + L_dis + 10, f"{cfg['id']} ({cfg['n']}x, 0°)\n{corr_ramo:.0f} A ({pc:.1f}%)", color=colore, fontsize=8, weight='bold', ha='center', va='bottom')
+    else:
+        # Piatto verticale (90°): in pianta si vede lo spessore s lungo X e la lunghezza a sbalzo L in +Z
+        for idx_b in range(cfg["n"]):
+            off_b = idx_b * (cfg["s"] + cfg["d"])
+            x_ala_b = cfg["x_ala"] - cfg["s"] / 2.0 + off_b
+            ax5.add_patch(patches.Rectangle((x_ala_b, spess_tot_p), cfg["s"], L_dis, facecolor='#e68a00', edgecolor='black', linewidth=1.1, hatch='//'))
+        ax5.text(cfg["x_ala"], spess_tot_p + L_dis + 10, f"{cfg['id']} ({cfg['n']}x, 90°)\n{corr_ramo:.0f} A ({pc:.1f}%)", color=colore, fontsize=8, weight='bold', ha='center', va='bottom')
+
+# Quota ingombro laterale
+ax5.axvline(0, color='gray', linestyle=':', linewidth=0.8)
+ax5.axvline(B_piastra, color='gray', linestyle=':', linewidth=0.8)
+ax5.set_title("5. Pianta Meccanica X-Z (Vista dall'Alto)", fontsize=10, weight='bold')
+ax5.set_xlabel("Larghezza X [mm]")
+ax5.set_ylabel("Profondità Z [mm]")
+ax5.set_xlim(-20, B_piastra + 20)
+ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 140)
+ax5.set_aspect('equal', adjustable='box')
+ax5.grid(True, linestyle=':', alpha=0.5)
 
 plt.tight_layout()
 st.pyplot(fig)
 plt.close(fig)
 
 # ==============================================================================
-# 7. REPORT TECNICO DI VERIFICA MELSOM & BOOTH REV. 2.1
+# 7. REPORT ANALITICO DEI COEFFICIENTI K1..K9 E CONFORMITÀ DFM
 # ==============================================================================
-st.subheader("📋 Report di Verifica Elettrotermica Unificato (Metodo Melsom & Booth Rev. 2.1)")
+st.subheader("📋 Report Analitico Coefficienti Melsom & Booth (K1..K9) e Verifiche")
 st.table(pd.DataFrame({
-    "Elemento / Parametro": [
-        "Condizioni Operative e Coefficienti Ambientali",
-        f"Piastra Collettrice ({B_piastra:.0f}x{s_piastra:.0f} mm - Posa di Costa)",
-        f"Ramo Barra A ({cfg_A['w']:.0f}x{cfg_A['s']:.0f} mm - {cfg_A['orient']})",
-        f"Ramo Barra B ({cfg_B['w']:.0f}x{cfg_B['s']:.0f} mm - {cfg_B['orient']})",
-        "Resistenze Ohmiche a Caldo dei Rami (A / B)",
-        f"Potenza Dissipata per Effetto Joule a {T_regime} °C"
+    "Elemento Costruttivo": [
+        f"Piastra Collettrice ({n_piastra}x {B_piastra:.0f}x{s_piastra:.0f} mm)",
+        f"Ramo Barra A ({cfg_A['n']}x {cfg_A['w']:.0f}x{cfg_A['s']:.0f} mm - {mb_A['nota_acc']})",
+        f"Ramo Barra B ({cfg_B['n']}x {cfg_B['w']:.0f}x{cfg_B['s']:.0f} mm - {mb_B['nota_acc']})",
+        "Bilancio Energetico e Termico (a regime operativo)"
     ],
-    "Valore Operativo Calcolato (2D FDM)": [
-        f"Tamb = {tamb_in} °C | DT = {dt_in} K | T_regime = {T_regime} °C | f = {freq_in} Hz",
-        f"I_max sezione = {I_sez_piastra_max:.0f} A  |  J_max sezione = {J_sez_piastra_max:.2f} A/mm²",
-        f"I_A = {res['I_A']:.0f} A ({p_A:.1f} %)  |  J_A = {J_L_A:.2f} A/mm²",
-        f"I_B = {res['I_B']:.0f} A ({p_B:.1f} %)  |  J_B = {J_L_B:.2f} A/mm²",
-        f"R_A = {res['R_A_uohm']:.2f} µΩ (L_A={cfg_A['L']:.0f} mm)  |  R_B = {res['R_B_uohm']:.2f} µΩ (L_B={cfg_B['L']:.0f} mm)",
-        f"Piastra: {res['P_piastra']:.1f} watt | Barre a L: {(res['P_A'] + res['P_B']):.1f} watt | Totale: {P_tot:.1f} watt ({P_tot/1000.0:.2f} chilowatt)"
+    "Corrente e Densità Operativa (2D FDM)": [
+        f"I_max = {I_sez_piastra_max:.0f} A  |  J_max = {J_sez_piastra_max:.2f} A/mm² (Sez. {sez_piastra:.0f} mm²)",
+        f"I_A = {res['I_A']:.0f} A ({p_A:.1f} %)  |  J_A = {J_L_A:.2f} A/mm² (Sez. {sez_A:.0f} mm²)",
+        f"I_B = {res['I_B']:.0f} A ({p_B:.1f} %)  |  J_B = {J_L_B:.2f} A/mm² (Sez. {sez_B:.0f} mm²)",
+        f"Piastra: {res['P_piastra']:.1f} watt | Rami: {(res['P_A'] + res['P_B']):.1f} watt | Totale: {P_tot:.1f} watt ({P_tot/1000.0:.2f} chilowatt)"
     ],
-    "Limite Ammissibile Melsom & Booth (Rev. 2.1)": [
-        f"K1={mb_piastra['K1']:.2f}, K2={mb_piastra['K2']:.2f}, K3={mb_piastra['K3']:.2f}, K4={mb_piastra['K4']:.2f}, K5={mb_piastra['K5']:.2f}, K9={mb_piastra['K9']:.3f}",
-        f"I_amm = {mb_piastra['I_amm']:.0f} A  |  J_amm = {mb_piastra['J_amm']:.2f} A/mm² (K_tot = {mb_piastra['K_tot']:.3f})",
-        f"I_amm = {mb_A['I_amm']:.0f} A  |  J_amm = {mb_A['J_amm']:.2f} A/mm² (K8 = {mb_A['K8']:.2f}, K_tot = {mb_A['K_tot']:.3f})",
-        f"I_amm = {mb_B['I_amm']:.0f} A  |  J_amm = {mb_B['J_amm']:.2f} A/mm² (K8 = {mb_B['K8']:.2f}, K_tot = {mb_B['K_tot']:.3f})",
-        f"Calcolate con resistività a caldo rho({T_regime} °C) = {rho_caldo:.4f} µΩ·m",
-        "Da evacuare nel vano sbarre per mantenere DT <= " + f"{dt_in} K"
+    "Catena Coefficienti Melsom & Booth (K1..K9)": [
+        f"K1={mb_piastra['K1']:.2f} | K2={mb_piastra['K2']:.2f} | K3={mb_piastra['K3']:.2f} | K4={mb_piastra['K4']:.2f} | K6={mb_piastra['K6']:.2f} | K7={mb_piastra['K7']:.3f} | K8={mb_piastra['K8']:.2f} | K9={mb_piastra['K9']:.3f} (s_eff={mb_piastra['s_eff']:.1f} mm)",
+        f"K1={mb_A['K1']:.2f} | K2={mb_A['K2']:.2f} | K3={mb_A['K3']:.2f} | K4={mb_A['K4']:.2f} | K6={mb_A['K6']:.2f} | K7={mb_A['K7']:.3f} | K8={mb_A['K8']:.2f} | K9={mb_A['K9']:.3f} (s_eff={mb_A['s_eff']:.1f} mm)",
+        f"K1={mb_B['K1']:.2f} | K2={mb_B['K2']:.2f} | K3={mb_B['K3']:.2f} | K4={mb_B['K4']:.2f} | K6={mb_B['K6']:.2f} | K7={mb_B['K7']:.3f} | K8={mb_B['K8']:.2f} | K9={mb_B['K9']:.3f} (s_eff={mb_B['s_eff']:.1f} mm)",
+        f"R_A = {res['R_A_uohm']:.2f} µΩ (L_A={cfg_A['L']:.0f} mm)  |  R_B = {res['R_B_uohm']:.2f} µΩ (L_B={cfg_B['L']:.0f} mm)"
     ],
-    "Esito Verifica": [
-        "Parametri normativi DIN 43671 / CEI EN 61439-1",
-        "VERIFICATO" if I_sez_piastra_max <= mb_piastra["I_amm"] else "SUPERAMENTO PORTATA PIASTRA",
-        "VERIFICATO" if res["I_A"] <= mb_A["I_amm"] else "SUPERAMENTO PORTATA BARRA A",
-        "VERIFICATO" if res["I_B"] <= mb_B["I_amm"] else "SUPERAMENTO PORTATA BARRA B",
-        "Continuità materiale sul sormonto",
-        f"Errore Kirchhoff: {res['err_perc']:.6f} %"
+    "Portata Limite ed Esito Elettrotermico": [
+        f"I_amm = {mb_piastra['I_amm']:.0f} A (J_amm = {mb_piastra['J_amm']:.2f} A/mm²) -> " + ("CONFORME" if I_sez_piastra_max <= mb_piastra["I_amm"] else "SOVRACCARICO"),
+        f"I_amm = {mb_A['I_amm']:.0f} A (J_amm = {mb_A['J_amm']:.2f} A/mm²) -> " + ("CONFORME" if res["I_A"] <= mb_A["I_amm"] else "SOVRACCARICO"),
+        f"I_amm = {mb_B['I_amm']:.0f} A (J_amm = {mb_B['J_amm']:.2f} A/mm²) -> " + ("CONFORME" if res["I_B"] <= mb_B["I_amm"] else "SOVRACCARICO"),
+        f"Errore numerico Kirchhoff: {res['err_perc']:.6f} %"
     ]
 }))
