@@ -11,7 +11,7 @@ import streamlit as st
 # CONFIGURAZIONE INTERFACCIA STREAMLIT
 # ==============================================================================
 st.set_page_config(
-    page_title="LOADBANK-MASTER | Busbar 2D FDM + Verifiche Rev. 2.2",
+    page_title="LOADBANK-MASTER | Busbar 2D FDM + Verifiche Rev. 2.4",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -81,7 +81,7 @@ MODO_VERT = "Verticale (90° - Piega lungo Y, ala di costa)"
 
 
 # ==============================================================================
-# 2. MOTORE COMPLETO ELETTROTERMICO, CORTOCIRCUITO ED ELETTRODINAMICA (REV. 2.2)
+# 2. MOTORE COMPLETO ELETTROTERMICO, CORTOCIRCUITO ED ELETTRODINAMICA (REV. 2.4)
 # ==============================================================================
 def esegui_calcolo_completo(
     h, s, n, d, giacitura_costa, metallo_str, freq, t_amb, dt,
@@ -280,17 +280,19 @@ x_offset_pl = st.sidebar.number_input(
     "Quota X Centro Griglia Powerlock [mm]",
     min_value=10.0, max_value=float(B_piastra - 10.0), value=float(B_piastra / 2.0), step=5.0
 )
-y_offset_pl = st.sidebar.number_input("Quota Y Prima Riga dal Basso [mm]", min_value=10.0, max_value=2500.0, value=160.0, step=10.0)
+y_offset_pl = st.sidebar.number_input("Quota Y Prima Riga dal Basso [mm]", min_value=10.0, max_value=float(H_piastra - 10.0), value=min(160.0, float(H_piastra - 10.0)), step=10.0)
 diam_pl = st.sidebar.number_input("Diametro Impronta Powerlock [mm]", min_value=15.0, max_value=80.0, value=32.0, step=2.0)
 
 st.sidebar.header("3. Configurazione Rami in Uscita")
-num_rami = st.sidebar.radio(
-    "Numero di rami in uscita verso quadro",
-    options=[1, 2],
-    format_func=lambda x: "1 Barra/Fascio in Uscita (Solo Ramo A)" if x == 1 else "2 Barre/Fasci in Uscita (Ramo A + Ramo B)",
-    index=0
+config_rami = st.sidebar.radio(
+    "Rami in uscita verso quadro",
+    options=["Solo A", "Solo B", "A + B"],
+    index=0,
+    help="Seleziona il ramo da mantenere o entrambi. Almeno un ramo deve essere attivo."
 )
-attiva_B = (num_rami == 2)
+attiva_A = config_rami in ("Solo A", "A + B")
+attiva_B = config_rami in ("Solo B", "A + B")
+num_rami = int(attiva_A) + int(attiva_B)
 
 
 def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx):
@@ -298,21 +300,23 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
     orient = st.sidebar.selectbox(f"Orientamento Barra {id_barra}", [MODO_ORIZZ, MODO_VERT], index=orient_def_idx, key=f"or_{id_barra}")
     n_b = st.sidebar.selectbox(f"Numero Sbarre in Parallelo // ({id_barra})", options=[1, 2, 3, 4, 5, 6], index=1, key=f"n_{id_barra}")
     d_b = 0.0 if n_b == 1 else st.sidebar.number_input(
-        f"Distanza netta d tra sbarre parallele ({id_barra}) [mm]",
+        f"Distanza netta d tra sbarre sul tratto a sbalzo ({id_barra}) [mm]",
         min_value=0.0, max_value=150.0, value=10.0, step=1.0, key=f"d_{id_barra}",
-        help="Distanza aria libera tra le facce interne del fascio per verifica effetto termico K7 ed elettrodinamico"
+        help="Sul sormonto imbullonato le sbarre sono a contatto (d=0 mm); sul tratto a sbalzo dopo la piega sono distanziate di d."
     )
     w_b = st.sidebar.number_input(f"Larghezza Barra {id_barra} (h) [mm]", min_value=20.0, max_value=800.0, value=120.0, step=10.0, key=f"w_{id_barra}")
     h_b = st.sidebar.number_input(f"Profondità Sormonto {id_barra} [mm]", min_value=15.0, max_value=400.0, value=60.0, step=5.0, key=f"h_{id_barra}")
     s_b = st.sidebar.number_input(f"Spessore Singola Barra {id_barra} (s) [mm]", min_value=3.0, max_value=30.0, value=10.0, step=1.0, key=f"s_{id_barra}")
     L_b = st.sidebar.number_input(f"Lunghezza Ramo {id_barra} a sbalzo su piastra [mm]", min_value=20.0, max_value=1500.0, value=120.0, step=10.0, key=f"L_{id_barra}")
 
-    spess_fascio = n_b * s_b + (n_b - 1) * d_b
-    if h_b < spess_fascio:
+    spess_sorm_z = n_b * s_b
+    spess_fascio_ala = n_b * s_b + (n_b - 1) * d_b
+
+    if h_b < spess_fascio_ala:
         st.sidebar.warning(
-            f"⚠️ Ramo {id_barra}: la profondità di sormonto ({h_b:.0f} mm) è inferiore all'ingombro "
-            f"complessivo di piega del fascio ({spess_fascio:.0f} mm per {n_b} sbarre). "
-            f"Si consiglia una profondità sormonto >= {spess_fascio:.0f} mm."
+            f"⚠️ Ramo {id_barra}: la profondità di sormonto ({h_b:.0f} mm) è inferiore allo sviluppo "
+            f"trasversale di piega del fascio ({spess_fascio_ala:.0f} mm per {n_b} sbarre). "
+            f"Consigliato h_sormonto >= {spess_fascio_ala + 20:.0f} mm per alloggiare la bulloneria."
         )
 
     if orient == MODO_ORIZZ:
@@ -366,15 +370,19 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
             value=float(min(max(y_def, min_y), max_y)), step=5.0, key=f"ys_{id_barra}"
         )
 
-    # Calcolo coordinate individuali di stacco per ciascuna delle n_b sbarre del fascio
+    # Coordinate di piega per le n_b sbarre: sormonti a contatto lungo Z (passo s_b),
+    # ali a sbalzo distanziate di d_b (passo s_b + d_b)
     if orient == MODO_ORIZZ:
         y0_s = y_sorm - dy_sorm / 2.0
         y1_s = y_sorm + dy_sorm / 2.0
         if "Inferiore" in lato_piega:
             y_ala_list = [y0_s + idx_b * (s_b + d_b) + s_b / 2.0 for idx_b in range(n_b)]
+            y_bolt = 0.5 * (y_ala_list[-1] + s_b / 2.0 + y1_s) if y1_s > (y_ala_list[-1] + s_b / 2.0) else y_sorm
         else:
             y_ala_list = [y1_s - idx_b * (s_b + d_b) - s_b / 2.0 for idx_b in range(n_b)]
+            y_bolt = 0.5 * (y0_s + y_ala_list[-1] - s_b / 2.0) if (y_ala_list[-1] - s_b / 2.0) > y0_s else y_sorm
         x_ala_list = [x_sorm for _ in range(n_b)]
+        x_bolt = x_sorm
         x_ala = x_sorm
         y_ala = float(np.mean(y_ala_list))
     else:
@@ -382,38 +390,41 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
         x1_s = x_sorm + dx_sorm / 2.0
         if "Sinistro" in lato_piega:
             x_ala_list = [x0_s + idx_b * (s_b + d_b) + s_b / 2.0 for idx_b in range(n_b)]
+            x_bolt = 0.5 * (x_ala_list[-1] + s_b / 2.0 + x1_s) if x1_s > (x_ala_list[-1] + s_b / 2.0) else x_sorm
         else:
             x_ala_list = [x1_s - idx_b * (s_b + d_b) - s_b / 2.0 for idx_b in range(n_b)]
+            x_bolt = 0.5 * (x0_s + x_ala_list[-1] - s_b / 2.0) if (x_ala_list[-1] - s_b / 2.0) > x0_s else x_sorm
         y_ala_list = [y_sorm for _ in range(n_b)]
+        y_bolt = y_sorm
         y_ala = y_sorm
         x_ala = float(np.mean(x_ala_list))
 
     return {
         "id": id_barra, "orient": orient, "n": n_b, "d": d_b,
         "w": w_b, "h": h_b, "s": s_b, "L": L_b,
-        "spess_fascio": spess_fascio,
+        "spess_sorm_z": spess_sorm_z, "spess_fascio_ala": spess_fascio_ala,
         "dx": dx_sorm, "dy": dy_sorm, "x_sorm": x_sorm, "y_sorm": y_sorm,
         "x_ala": x_ala, "y_ala": y_ala,
         "x_ala_list": x_ala_list, "y_ala_list": y_ala_list,
+        "x_bolt": x_bolt, "y_bolt": y_bolt,
         "lato_piega": lato_piega,
         "costa": giacitura_ala_costa, "posa_str": posa_str
     }
 
 
-cfg_A = configura_barra_sidebar("A", x_def=B_piastra / 2.0, y_def=60.0, orient_def_idx=0, lato_def_idx=0)
+cfg_A = configura_barra_sidebar("A", x_def=B_piastra / 2.0, y_def=60.0, orient_def_idx=0, lato_def_idx=0) if attiva_A else None
 cfg_B = configura_barra_sidebar("B", x_def=B_piastra / 2.0, y_def=500.0, orient_def_idx=0, lato_def_idx=1) if attiva_B else None
 
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "**Ipotesi di Contatto e Accoppiamento:** Le barre sono approssimate come con **appoggio ideale** "
-    "sulla piastra collettrice. Gli effetti termici ed elettrodinamici tra sbarre parallele ($K_7, K_8, K_9$, "
-    "forze attrattive $F_{\\text{sub}}$) sono valutati internamente a ciascun fascio di sbarre."
+    "**Vincolo Meccanico Giunzione:** Sul sormonto le sbarre in parallelo sono **impacchettate a contatto ($d=0\\text{ mm}$)** "
+    "sotto i bulloni di serraggio. La spaziatura netta $d$ si sviluppa lungo il tratto a sbalzo dopo la piega a 90°."
 )
 
 # ==============================================================================
-# 4. INTESTAZIONE, VERIFICHE GEOMETRICHE E CALCOLO REV. 2.2
+# 4. INTESTAZIONE, VERIFICHE GEOMETRICHE E CALCOLO REV. 2.4
 # ==============================================================================
-st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar (2D FDM + Rev. 2.2)")
+st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar (2D FDM + Rev. 2.4)")
 st.markdown(
     """
     **Quadro Normativo Applicato:**  
@@ -421,7 +432,7 @@ st.markdown(
     `Metodo Melsom & Booth / CDA Pub. No. 22` (Equazione base DC e mutuo accoppiamento fascio $K_7$) • 
     `CEI EN 61439-1/2` (Limiti di sovratemperatura $\\Delta T \\le 70\\text{ K}$ e morsetti apparecchiature) • 
     `CEI EN 60865-1 / IEC 60949` (Cortocircuito adiabatico con $\\rho(T)$ variabile e forze elettrodinamiche) • 
-    `Solutore 2D FDM` (Mappa densità di corrente $|J|$ e potenziale su piastra con **appoggio ideale** dei rami)
+    `Solutore 2D FDM` (Sormonti serrati a pacco a contatto $d=0\\text{ mm}$ e rami a sbalzo distanziati di $d$)
     """
 )
 
@@ -436,16 +447,22 @@ if x_min_pl < 0 or x_max_pl > B_piastra:
 if y_min_pl < 0 or y_max_pl > H_piastra:
     errori_geom.append(f"La griglia Powerlock (Y da {y_min_pl:.1f} a {y_max_pl:.1f} mm) deborda dall'altezza piastra (0 - {H_piastra:.1f} mm).")
 
-xA1, xA2 = cfg_A["x_sorm"] - cfg_A["dx"] / 2.0, cfg_A["x_sorm"] + cfg_A["dx"] / 2.0
-yA1, yA2 = cfg_A["y_sorm"] - cfg_A["dy"] / 2.0, cfg_A["y_sorm"] + cfg_A["dy"] / 2.0
+# Solo le impronte dei rami presenti partecipano alle verifiche geometriche.
+def limiti_impronta(cfg):
+    if cfg is None:
+        return (0.0, 0.0, 0.0, 0.0)
+    return (
+        cfg["x_sorm"] - cfg["dx"] / 2.0,
+        cfg["x_sorm"] + cfg["dx"] / 2.0,
+        cfg["y_sorm"] - cfg["dy"] / 2.0,
+        cfg["y_sorm"] + cfg["dy"] / 2.0,
+    )
 
-if attiva_B:
-    xB1, xB2 = cfg_B["x_sorm"] - cfg_B["dx"] / 2.0, cfg_B["x_sorm"] + cfg_B["dx"] / 2.0
-    yB1, yB2 = cfg_B["y_sorm"] - cfg_B["dy"] / 2.0, cfg_B["y_sorm"] + cfg_B["dy"] / 2.0
+xA1, xA2, yA1, yA2 = limiti_impronta(cfg_A)
+xB1, xB2, yB1, yB2 = limiti_impronta(cfg_B)
+if attiva_A and attiva_B:
     if (xA1 < xB2) and (xA2 > xB1) and (yA1 < yB2) and (yA2 > yB1):
-        errori_geom.append("Collisione meccanica 2D: Le impronte di sormonto della Barra A e della Barra B si sovrappongono sulla piastra!")
-else:
-    xB1 = xB2 = yB1 = yB2 = 0.0
+        errori_geom.append("Collisione meccanica 2D: le impronte di sormonto dei rami A e B si sovrappongono sulla piastra!")
 
 if errori_geom:
     for err in errori_geom:
@@ -460,12 +477,14 @@ mb_piastra = esegui_calcolo_completo(
 )
 mb_piastra["nota_acc"] = f"Appoggio ideale - Piastra n={n_piastra} (d={d_piastra:.0f} mm)"
 
-mb_A = esegui_calcolo_completo(
-    cfg_A["w"], cfg_A["s"], cfg_A["n"], cfg_A["d"], cfg_A["costa"],
-    mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in,
-    lungh_tratta_in, t_lim_cw_in, ik_in
-)
-mb_A["nota_acc"] = f"Appoggio ideale - Fascio n={cfg_A['n']} (d={cfg_A['d']:.0f} mm)"
+mb_A = None
+if attiva_A:
+    mb_A = esegui_calcolo_completo(
+        cfg_A["w"], cfg_A["s"], cfg_A["n"], cfg_A["d"], cfg_A["costa"],
+        mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in,
+        lungh_tratta_in, t_lim_cw_in, ik_in
+    )
+    mb_A["nota_acc"] = f"Sormonto a contatto (d=0) / Ala n={cfg_A['n']} (d={cfg_A['d']:.0f} mm)"
 
 if attiva_B:
     mb_B = esegui_calcolo_completo(
@@ -473,7 +492,7 @@ if attiva_B:
         mat_scelto, freq_in, tamb_in, dt_in, vent_in, sup_in, forma_in,
         lungh_tratta_in, t_lim_cw_in, ik_in
     )
-    mb_B["nota_acc"] = f"Appoggio ideale - Fascio n={cfg_B['n']} (d={cfg_B['d']:.0f} mm)"
+    mb_B["nota_acc"] = f"Sormonto a contatto (d=0) / Ala n={cfg_B['n']} (d={cfg_B['d']:.0f} mm)"
 else:
     mb_B = None
 
@@ -484,7 +503,7 @@ else:
 @st.cache_data(show_spinner=False)
 def risolvi_busbar_2d(
     B, H, s_eff_p, rho_uohm_m, I_tot, n_col, n_row, px, py, x0_center_pl, y0_pl, d_pl,
-    xA1, xA2, yA1, yA2, wA, hA, sA, nA, k9A, LA,
+    usa_A, xA1, xA2, yA1, yA2, wA, hA, sA, nA, k9A, LA,
     usa_B, xB1, xB2, yB1, yB2, wB, hB, sB, nB, k9B, LB
 ):
     rho = rho_uohm_m * 1e-3
@@ -531,17 +550,22 @@ def risolvi_busbar_2d(
                 ind = np.array([np.argmin(dist2)])
             I_vec[ind] += I_sing / len(ind)
 
-    mask_A = (X >= xA1) & (X <= xA2) & (Y >= yA1) & (Y <= yA2)
-    ind_A = np.flatnonzero(mask_A)
-    if len(ind_A) == 0:
-        ind_A = np.array([np.argmin((X - 0.5 * (xA1 + xA2)) ** 2 + (Y - 0.5 * (yA1 + yA2)) ** 2)])
+    if usa_A:
+        mask_A = (X >= xA1) & (X <= xA2) & (Y >= yA1) & (Y <= yA2)
+        ind_A = np.flatnonzero(mask_A)
+        if len(ind_A) == 0:
+            ind_A = np.array([np.argmin((X - 0.5 * (xA1 + xA2)) ** 2 + (Y - 0.5 * (yA1 + yA2)) ** 2)])
 
-    R_att_A = rho * (0.5 * (s_eff_p + sA)) / (wA * hA * nA)
-    R_sorm_A = rho * hA / (3.0 * wA * sA * nA * (k9A ** 2))
-    R_A = R_att_A + R_sorm_A + (rho * LA) / (wA * sA * nA * (k9A ** 2))
-
-    g_A = (1.0 / R_A) / len(ind_A)
-    diag_main[ind_A] += g_A
+        # Resistenze equivalenti del contatto e del ramo A (modello semplificato).
+        R_att_A = rho * (0.5 * (s_eff_p + nA * sA)) / (wA * hA)
+        R_sorm_A = rho * hA / (3.0 * wA * sA * nA * (k9A ** 2))
+        R_A = R_att_A + R_sorm_A + (rho * LA) / (wA * sA * nA * (k9A ** 2))
+        g_A = (1.0 / R_A) / len(ind_A)
+        diag_main[ind_A] += g_A
+    else:
+        ind_A = np.array([], dtype=int)
+        R_A = 0.0
+        g_A = 0.0
 
     if usa_B:
         mask_B = (X >= xB1) & (X <= xB2) & (Y >= yB1) & (Y <= yB2)
@@ -549,7 +573,7 @@ def risolvi_busbar_2d(
         if len(ind_B) == 0:
             ind_B = np.array([np.argmin((X - 0.5 * (xB1 + xB2)) ** 2 + (Y - 0.5 * (yB1 + yB2)) ** 2)])
 
-        R_att_B = rho * (0.5 * (s_eff_p + sB)) / (wB * hB * nB)
+        R_att_B = rho * (0.5 * (s_eff_p + nB * sB)) / (wB * hB)
         R_sorm_B = rho * hB / (3.0 * wB * sB * nB * (k9B ** 2))
         R_B = R_att_B + R_sorm_B + (rho * LB) / (wB * sB * nB * (k9B ** 2))
 
@@ -572,7 +596,7 @@ def risolvi_busbar_2d(
     G_csr = sp.csr_matrix((vals, (rows, cols)), shape=(N, N))
     V = spla.spsolve(G_csr, I_vec)
 
-    I_A = float(np.sum(V[ind_A] * g_A))
+    I_A = float(np.sum(V[ind_A] * g_A)) if usa_A else 0.0
     I_B = float(np.sum(V[ind_B] * g_B)) if usa_B else 0.0
     V_2d = V.reshape((ny, nx))
     err_perc = abs((I_A + I_B) - I_tot) / I_tot * 100.0
@@ -584,7 +608,7 @@ def risolvi_busbar_2d(
     profilo_Iy = np.sum(Jy, axis=1) * dx * s_eff_p
 
     P_tot = float(I_vec @ V)
-    P_ramo_A = (I_A ** 2) * R_A
+    P_ramo_A = (I_A ** 2) * R_A if usa_A else 0.0
     P_ramo_B = ((I_B ** 2) * R_B) if usa_B else 0.0
     P_piastra = max(0.0, P_tot - P_ramo_A - P_ramo_B)
 
@@ -603,25 +627,26 @@ s_cond_piastra = s_piastra * n_piastra * (mb_piastra["K9"] ** 2)
 res = risolvi_busbar_2d(
     B_piastra, H_piastra, s_cond_piastra, rho_caldo, I_totale,
     X_col, Y_row, passo_x, passo_y, x_offset_pl, y_offset_pl, diam_pl,
-    xA1, xA2, yA1, yA2, cfg_A["w"], cfg_A["h"], cfg_A["s"], cfg_A["n"], mb_A["K9"], cfg_A["L"],
-    attiva_B,
-    xB1 if attiva_B else 0.0, xB2 if attiva_B else 0.0,
-    yB1 if attiva_B else 0.0, yB2 if attiva_B else 0.0,
+    attiva_A, xA1, xA2, yA1, yA2,
+    cfg_A["w"] if attiva_A else 1.0, cfg_A["h"] if attiva_A else 1.0,
+    cfg_A["s"] if attiva_A else 1.0, cfg_A["n"] if attiva_A else 1,
+    mb_A["K9"] if attiva_A else 1.0, cfg_A["L"] if attiva_A else 1.0,
+    attiva_B, xB1, xB2, yB1, yB2,
     cfg_B["w"] if attiva_B else 1.0, cfg_B["h"] if attiva_B else 1.0,
     cfg_B["s"] if attiva_B else 1.0, cfg_B["n"] if attiva_B else 1,
     mb_B["K9"] if attiva_B else 1.0, cfg_B["L"] if attiva_B else 1.0
 )
 
 # ==============================================================================
-# 6. AVVISI DI CONFORMITÀ NORMATIVA (REV. 2.2) E SCHEDE KPI
+# 6. AVVISI DI CONFORMITÀ NORMATIVA (REV. 2.4) E SCHEDE KPI
 # ==============================================================================
 p_A = res["I_A"] / I_totale * 100.0
 p_B = (res["I_B"] / I_totale * 100.0) if attiva_B else 0.0
-sez_A = mb_A["sez_tot"]
+sez_A = mb_A["sez_tot"] if attiva_A else 0.0
 sez_B = mb_B["sez_tot"] if attiva_B else 0.0
 sez_piastra = mb_piastra["sez_tot"]
 
-J_L_A = res["I_A"] / sez_A
+J_L_A = res["I_A"] / sez_A if attiva_A else 0.0
 J_L_B = (res["I_B"] / sez_B) if attiva_B else 0.0
 I_sez_piastra_max = float(np.max(np.abs(res["profilo_Iy"])))
 J_sez_piastra_max = I_sez_piastra_max / sez_piastra
@@ -641,7 +666,11 @@ elif dt_in > 65 or T_regime > 105:
         f"di interruttori (ACB/MCCB) prescrivono il declassamento per temperature ai morsetti superiori a 100 - 105 °C."
     )
 
-icw_min_sistema = min(mb_piastra["Icw_1s_IEC"], mb_A["Icw_1s_IEC"], mb_B["Icw_1s_IEC"] if attiva_B else float("inf"))
+icw_min_sistema = min(
+    [mb_piastra["Icw_1s_IEC"]]
+    + ([mb_A["Icw_1s_IEC"]] if attiva_A else [])
+    + ([mb_B["Icw_1s_IEC"]] if attiva_B else [])
+)
 if icw_min_sistema < ik_in:
     st.error(
         f"⚠️ **VERIFICA CORTOCIRCUITO NON SODDISFATTA**: La tenuta adiabatica minima a 1s del sistema ({icw_min_sistema:.1f} kA) "
@@ -657,12 +686,16 @@ if j_max_operativa > 3.0:
 st.markdown("---")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric(
-    label=f"Ramo A (Amm: {mb_A['I_amm']:.0f} A | K7={mb_A['K7']:.2f})",
-    value=f"{res['I_A']:.0f} A ({p_A:.1f}%)",
-    delta=f"J = {J_L_A:.2f} A/mm² (J_amm = {mb_A['J_amm']:.2f} A/mm²)",
-    delta_color="inverse" if res["I_A"] > mb_A["I_amm"] else "normal"
-)
+if attiva_A:
+    col1.metric(
+        label=f"Ramo A (Amm: {mb_A['I_amm']:.0f} A | K7={mb_A['K7']:.2f})",
+        value=f"{res['I_A']:.0f} A ({p_A:.1f}%)",
+        delta=f"J = {J_L_A:.2f} A/mm² (J_amm = {mb_A['J_amm']:.2f} A/mm²)",
+        delta_color="inverse" if res["I_A"] > mb_A["I_amm"] else "normal"
+    )
+else:
+    col1.metric("Ramo A (escluso)", "Non presente")
+
 if attiva_B:
     col2.metric(
         label=f"Ramo B (Amm: {mb_B['I_amm']:.0f} A | K7={mb_B['K7']:.2f})",
@@ -671,12 +704,7 @@ if attiva_B:
         delta_color="inverse" if res["I_B"] > mb_B["I_amm"] else "normal"
     )
 else:
-    col2.metric(
-        label="Ramo B (Disattivato - Uscita Singola)",
-        value="Non presente",
-        delta="Appoggio ideale su singola uscita A",
-        delta_color="off"
-    )
+    col2.metric("Ramo B (escluso)", "Non presente")
 
 col3.metric(
     label=f"Piastra (Amm: {mb_piastra['I_amm']:.0f} A | Icw={mb_piastra['Icw_1s_IEC']:.1f} kA)",
@@ -696,7 +724,7 @@ st.markdown("---")
 # ==============================================================================
 # 7. DASHBOARD GRAFICA 2D FDM E LAYOUT MECCANICO A 5 VISTE
 # ==============================================================================
-st.subheader("🗺️ Mappa Elettrodinamica 2D FDM e Proiezioni Meccaniche (Piastra + Sormonti + Fasci a Sbalzo)")
+st.subheader("🗺️ Mappa Elettrodinamica 2D FDM e Proiezioni Meccaniche (Sormonti a Contatto + Fasci a Sbalzo Distanziati)")
 fig = plt.figure(figsize=(26, 10))
 gs = fig.add_gridspec(1, 5, width_ratios=[1.0, 1.0, 0.95, 0.85, 1.05])
 
@@ -714,7 +742,6 @@ def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
         (x0, y0), cfg["dx"], cfg["dy"],
         edgecolor=colore_bordo, facecolor='none', linewidth=2.2, linestyle='--'
     ))
-    # Disegno delle n sezioni di stacco del fascio a sbalzo
     if cfg["orient"] == MODO_ORIZZ:
         for y_c_b in cfg["y_ala_list"]:
             ax.add_patch(patches.Rectangle(
@@ -736,11 +763,13 @@ def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
     )
 
 
-rami_attivi_plot = [(cfg_A, 'blue', p_A, res["I_A"])]
+rami_attivi_plot = []
+if attiva_A:
+    rami_attivi_plot.append((cfg_A, 'blue', p_A, res["I_A"]))
 if attiva_B:
     rami_attivi_plot.append((cfg_B, 'green', p_B, res["I_B"]))
 
-max_spess_fascio = max(c["spess_fascio"] for c, _, _, _ in rami_attivi_plot)
+max_spess_sorm_z = max(c["spess_sorm_z"] for c, _, _, _ in rami_attivi_plot)
 
 # 1. MAPPA DENSITÀ |J|
 im1 = ax1.pcolormesh(res["X"], res["Y"], res["J_mag"], shading='auto', cmap='inferno', vmin=0, vmax=max(mb_piastra["J_amm"] * 1.3, J_99_piastra))
@@ -750,7 +779,8 @@ cbar1.ax.tick_params(labelsize=10)
 ax1.streamplot(res["x"], res["y"], res["Jx"], res["Jy"], color='cyan', linewidth=0.7, density=0.85, arrowsize=0.7)
 for (xp, yp) in res["coords_pl"]:
     ax1.add_patch(patches.Circle((xp, yp), radius=diam_pl / 2.0, edgecolor='white', facecolor='none', linewidth=1.2))
-disegna_impronta_e_piega(ax1, cfg_A, p_A, 'cyan')
+if attiva_A:
+    disegna_impronta_e_piega(ax1, cfg_A, p_A, 'cyan')
 if attiva_B:
     disegna_impronta_e_piega(ax1, cfg_B, p_B, 'cyan')
 ax1.set_title("1. Densità |J| e Stacco Barre (Verde)", fontsize=12, weight='bold')
@@ -768,7 +798,8 @@ cbar2.set_label("Potenziale [mV]", fontsize=11, weight='bold')
 cbar2.ax.tick_params(labelsize=10)
 for (xp, yp) in res["coords_pl"]:
     ax2.add_patch(patches.Circle((xp, yp), radius=diam_pl / 2.0, edgecolor='white', facecolor='none', linewidth=1.0, alpha=0.7))
-disegna_impronta_e_piega(ax2, cfg_A, p_A, 'red')
+if attiva_A:
+    disegna_impronta_e_piega(ax2, cfg_A, p_A, 'red')
 if attiva_B:
     disegna_impronta_e_piega(ax2, cfg_B, p_B, 'red')
 ax2.set_title("2. Potenziale Elettrico [mV]", fontsize=12, weight='bold')
@@ -781,7 +812,8 @@ ax2.tick_params(labelsize=10)
 
 # 3. FLUSSO ASSIALE VERTICALE |Iy|
 ax3.plot(np.abs(res["profilo_Iy"]), res["y"], color='#d95f02', linewidth=2.4, label="|Iy(y)| in piastra")
-ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.4, label=f"Centro A ({cfg_A['y_sorm']:.0f} mm)")
+if attiva_A:
+    ax3.axhline(cfg_A["y_sorm"], color='blue', linestyle='--', linewidth=1.4, label=f"Centro A ({cfg_A['y_sorm']:.0f} mm)")
 if attiva_B:
     ax3.axhline(cfg_B["y_sorm"], color='green', linestyle='--', linewidth=1.4, label=f"Centro B ({cfg_B['y_sorm']:.0f} mm)")
 ax3.axvline(mb_piastra["I_amm"], color='red', linestyle=':', linewidth=2.0, label=f"I_amm ({mb_piastra['I_amm']:.0f} A)")
@@ -794,7 +826,7 @@ ax3.grid(True, linestyle='--', alpha=0.5)
 ax3.legend(loc='upper right', fontsize=9.5)
 ax3.tick_params(labelsize=10)
 
-# 4. PROIEZIONE LATERALE Y-Z (SDOPPIAMENTO COMPLETO SORMONTO + ALA A SBALZO)
+# 4. PROIEZIONE LATERALE Y-Z (SORMONTI A CONTATTO d=0 + ALI A SBALZO DISTANZIATE DI d)
 L_DRAW_MAX = 150.0
 prof_pl_disegno = diam_pl * 1.4
 spess_tot_p = n_piastra * s_piastra + (n_piastra - 1) * d_piastra
@@ -807,14 +839,15 @@ for cfg, colore, pc, corr_ramo in rami_attivi_plot:
     L_dis = min(cfg["L"], L_DRAW_MAX)
     y_bot = cfg["y_sorm"] - cfg["dy"] / 2.0
     y_top = cfg["y_sorm"] + cfg["dy"] / 2.0
+    z_fine_sorm = spess_tot_p + cfg["spess_sorm_z"]
+    z_fine_ala = z_fine_sorm + L_dis
 
-    for idx_b in range(cfg["n"]):
-        off_b = idx_b * (cfg["s"] + cfg["d"])
-        z_sorm_b = spess_tot_p + off_b
-
-        if cfg["orient"] == MODO_ORIZZ:
-            # Sviluppo a L concentrico nel piano Y-Z: ogni barra ha la propria quota Y sull'ala a sbalzo
+    if cfg["orient"] == MODO_ORIZZ:
+        for idx_b in range(cfg["n"]):
+            # Sormonto a contatto diretto (d_sormonto = 0 -> passo Z = cfg["s"])
+            z_sorm_b = spess_tot_p + idx_b * cfg["s"]
             y_ala_bot_b = cfg["y_ala_list"][idx_b] - cfg["s"] / 2.0
+
             if "Inferiore" in cfg["lato_piega"]:
                 y_sorm_start = y_ala_bot_b
                 h_sorm_b = max(cfg["s"], y_top - y_sorm_start)
@@ -823,31 +856,40 @@ for cfg, colore, pc, corr_ramo in rami_attivi_plot:
                 y_sorm_start = min(y_bot, y_ala_bot_b)
                 h_sorm_b = max(cfg["s"], y_sorm_end - y_sorm_start)
 
-            # Tratto verticale di sormonto della singola barra idx_b
+            # Tratto di sormonto a contatto lungo Z
             ax4.add_patch(patches.Rectangle(
                 (z_sorm_b, y_sorm_start), cfg["s"], h_sorm_b,
                 facecolor='#d9822b', edgecolor='black', linewidth=1.2
             ))
-            # Tratto orizzontale a sbalzo della singola barra idx_b (sdoppiato lungo Y con passo s + d)
+            # Tratto a sbalzo distanziato di d lungo Y, allineato a z_fine_ala
+            z_ala_start = z_sorm_b + cfg["s"]
+            L_ala_b = z_fine_ala - z_ala_start
             ax4.add_patch(patches.Rectangle(
-                (z_sorm_b + cfg["s"], y_ala_bot_b), L_dis, cfg["s"],
+                (z_ala_start, y_ala_bot_b), L_ala_b, cfg["s"],
                 facecolor='#e68a00', edgecolor='black', linewidth=1.1
             ))
-        else:
-            # In MODO_VERT le sbarre a sbalzo sono affiancate lungo X; in vista Y-Z si vedono di costa
+    else:
+        # In MODO_VERT i sormonti sono a contatto lungo Z e l'ala parte da z_fine_sorm
+        for idx_b in range(cfg["n"]):
+            z_sorm_b = spess_tot_p + idx_b * cfg["s"]
             ax4.add_patch(patches.Rectangle(
                 (z_sorm_b, y_bot), cfg["s"], cfg["dy"],
                 facecolor='#d9822b', edgecolor='black', linewidth=1.2
             ))
-            ax4.add_patch(patches.Rectangle(
-                (z_sorm_b + cfg["s"], y_bot), L_dis, cfg["dy"],
-                facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.55, hatch='//'
-            ))
+        ax4.add_patch(patches.Rectangle(
+            (z_fine_sorm, y_bot), L_dis, cfg["dy"],
+            facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.65, hatch='//'
+        ))
+
+    # Asse bulloneria di serraggio sul pacco sormonto a contatto
+    ax4.plot(
+        [-8.0, z_fine_sorm + 8.0], [cfg["y_bolt"], cfg["y_bolt"]],
+        color='#1f2937', linestyle='-.', linewidth=1.3
+    )
 
     y_testo = cfg["y_ala"] if cfg["orient"] == MODO_ORIZZ else cfg["y_sorm"]
-    z_fine_fascio = spess_tot_p + cfg["spess_fascio"] + L_dis
     ax4.text(
-        z_fine_fascio + 10, y_testo,
+        z_fine_ala + 10, y_testo,
         f"{cfg['id']} ({cfg['n']}x): {pc:.1f}%\n({corr_ramo:.0f} A)",
         color=colore, fontsize=9.5, weight='bold', va='center'
     )
@@ -856,15 +898,15 @@ y_pl_unici = sorted(set(yp for (_, yp) in res["coords_pl"]))
 for yp in y_pl_unici:
     ax4.add_patch(patches.Rectangle((-prof_pl_disegno, yp - diam_pl / 2.0), prof_pl_disegno, diam_pl, facecolor='#333333', edgecolor='black', linewidth=1.0))
 
-ax4.set_title("4. Sezione Laterale Y-Z", fontsize=12, weight='bold')
+ax4.set_title("4. Sezione Laterale Y-Z (Sormonti a Contatto)", fontsize=12, weight='bold')
 ax4.set_xlabel("Profondità Z [mm]", fontsize=11, weight='bold')
 ax4.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
-ax4.set_xlim(-prof_pl_disegno - 30, spess_tot_p + max_spess_fascio + L_DRAW_MAX + 170)
+ax4.set_xlim(-prof_pl_disegno - 30, spess_tot_p + max_spess_sorm_z + L_DRAW_MAX + 165)
 ax4.set_ylim(0, H_piastra)
 ax4.grid(True, linestyle=':', alpha=0.5)
 ax4.tick_params(labelsize=10)
 
-# 5. VISTA DALL'ALTO X-Z (SDOPPIAMENTO COMPLETO SORMONTO + ALA A SBALZO)
+# 5. VISTA DALL'ALTO X-Z (SORMONTI A CONTATTO d=0 + ALI A SBALZO DISTANZIATE DI d)
 for idx_p in range(n_piastra):
     z0_p = idx_p * (s_piastra + d_piastra)
     ax5.add_patch(patches.Rectangle((0, z0_p), B_piastra, s_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.2))
@@ -877,24 +919,27 @@ for cfg, colore, pc, corr_ramo in rami_attivi_plot:
     L_dis = min(cfg["L"], L_DRAW_MAX)
     x_sorm_start = cfg["x_sorm"] - cfg["dx"] / 2.0
     x_sorm_end = cfg["x_sorm"] + cfg["dx"] / 2.0
+    z_fine_sorm = spess_tot_p + cfg["spess_sorm_z"]
+    z_fine_ala = z_fine_sorm + L_dis
 
-    for idx_b in range(cfg["n"]):
-        off_z = idx_b * (cfg["s"] + cfg["d"])
-        z_sorm_b = spess_tot_p + off_z
-
-        if cfg["orient"] == MODO_ORIZZ:
-            # In MODO_ORIZZ le sbarre a sbalzo sono impilate lungo Y; in pianta X-Z si vedono di piatto
+    if cfg["orient"] == MODO_ORIZZ:
+        # In MODO_ORIZZ i sormonti sono a contatto lungo Z e l'ala di piatto parte da z_fine_sorm
+        for idx_b in range(cfg["n"]):
+            z_sorm_b = spess_tot_p + idx_b * cfg["s"]
             ax5.add_patch(patches.Rectangle(
                 (x_sorm_start, z_sorm_b), cfg["dx"], cfg["s"],
                 facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
             ))
-            ax5.add_patch(patches.Rectangle(
-                (x_sorm_start, z_sorm_b + cfg["s"]), cfg["dx"], L_dis,
-                facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.65
-            ))
-        else:
-            # Sviluppo a L concentrico nel piano X-Z: ogni barra ha la propria ascissa X sull'ala a sbalzo
+        ax5.add_patch(patches.Rectangle(
+            (x_sorm_start, z_fine_sorm), cfg["dx"], L_dis,
+            facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.70
+        ))
+    else:
+        for idx_b in range(cfg["n"]):
+            # Sormonto a contatto diretto (d_sormonto = 0 -> passo Z = cfg["s"])
+            z_sorm_b = spess_tot_p + idx_b * cfg["s"]
             x_ala_left_b = cfg["x_ala_list"][idx_b] - cfg["s"] / 2.0
+
             if "Sinistro" in cfg["lato_piega"]:
                 x_sorm_b = x_ala_left_b
                 w_sorm_b = max(cfg["s"], x_sorm_end - x_sorm_b)
@@ -903,32 +948,39 @@ for cfg, colore, pc, corr_ramo in rami_attivi_plot:
                 x_sorm_b = min(x_sorm_start, x_ala_left_b)
                 w_sorm_b = max(cfg["s"], x_sorm_right_b - x_sorm_b)
 
-            # Tratto orizzontale di sormonto della singola barra idx_b
+            # Tratto di sormonto a contatto lungo Z
             ax5.add_patch(patches.Rectangle(
                 (x_sorm_b, z_sorm_b), w_sorm_b, cfg["s"],
                 facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
             ))
-            # Tratto verticale a sbalzo della singola barra idx_b (sdoppiato lungo X con passo s + d)
+            # Tratto a sbalzo distanziato di d lungo X, allineato a z_fine_ala
+            z_ala_start = z_sorm_b + cfg["s"]
+            L_ala_b = z_fine_ala - z_ala_start
             ax5.add_patch(patches.Rectangle(
-                (x_ala_left_b, z_sorm_b + cfg["s"]), cfg["s"], L_dis,
+                (x_ala_left_b, z_ala_start), cfg["s"], L_ala_b,
                 facecolor='#e68a00', edgecolor='black', linewidth=1.1, hatch='//'
             ))
 
+    # Asse bulloneria di serraggio sul pacco sormonto a contatto
+    ax5.plot(
+        [cfg["x_bolt"], cfg["x_bolt"]], [-8.0, z_fine_sorm + 8.0],
+        color='#1f2937', linestyle='-.', linewidth=1.3
+    )
+
     x_testo = cfg["x_sorm"] if cfg["orient"] == MODO_ORIZZ else cfg["x_ala"]
-    z_fine_fascio = spess_tot_p + cfg["spess_fascio"] + L_dis
     ax5.text(
-        x_testo, z_fine_fascio + 10,
+        x_testo, z_fine_ala + 10,
         f"{cfg['id']} ({cfg['n']}x)\n{corr_ramo:.0f} A ({pc:.1f}%)",
         color=colore, fontsize=9.5, weight='bold', ha='center', va='bottom'
     )
 
 ax5.axvline(0, color='gray', linestyle=':', linewidth=0.8)
 ax5.axvline(B_piastra, color='gray', linestyle=':', linewidth=0.8)
-ax5.set_title("5. Pianta Meccanica X-Z (Con Sormonto)", fontsize=12, weight='bold')
+ax5.set_title("5. Pianta Meccanica X-Z (Sormonti a Contatto)", fontsize=12, weight='bold')
 ax5.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
 ax5.set_ylabel("Profondità Z [mm]", fontsize=11, weight='bold')
 ax5.set_xlim(-20, B_piastra + 20)
-ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + max_spess_fascio + L_DRAW_MAX + 160)
+ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + max_spess_sorm_z + L_DRAW_MAX + 155)
 ax5.grid(True, linestyle=':', alpha=0.5)
 ax5.tick_params(labelsize=10)
 
@@ -937,24 +989,23 @@ st.pyplot(fig)
 plt.close(fig)
 
 # ==============================================================================
-# 8. VERIFICA EFFETTI TERMICI TRA SBARRE PARALLELE DEL FASCIO (GRAFICI REV. 2.2)
+# 8. VERIFICA EFFETTI TERMICI TRA SBARRE PARALLELE DEL FASCIO (GRAFICI REV. 2.4)
 # ==============================================================================
 st.markdown("---")
-st.subheader("🔥 Verifica Effetti Termici ed Effetto Pelle tra Sbarre Parallele del Ramo (Rev. 2.2)")
+st.subheader("🔥 Verifica Effetti Termici ed Effetto Pelle tra Sbarre Parallele sul Tratto a Sbalzo (Rev. 2.4)")
 
-if attiva_B:
+if attiva_A and attiva_B:
     ramo_ispezione = st.radio(
         "Seleziona il Ramo di Uscita da ispezionare nel dettaglio (Sezione Skin Depth + Curva Portata vs Distanza d):",
-        options=["Ramo A", "Ramo B"],
-        horizontal=True
+        options=["Ramo A", "Ramo B"], horizontal=True
     )
-    cfg_isp = cfg_A if ramo_ispezione == "Ramo A" else cfg_B
-    mb_isp = mb_A if ramo_ispezione == "Ramo A" else mb_B
-    I_op_isp = res["I_A"] if ramo_ispezione == "Ramo A" else res["I_B"]
+    id_ispezione = "A" if ramo_ispezione == "Ramo A" else "B"
 else:
-    cfg_isp = cfg_A
-    mb_isp = mb_A
-    I_op_isp = res["I_A"]
+    id_ispezione = "A" if attiva_A else "B"
+
+cfg_isp = cfg_A if id_ispezione == "A" else cfg_B
+mb_isp = mb_A if id_ispezione == "A" else mb_B
+I_op_isp = res[f"I_{id_ispezione}"]
 
 h_isp = int(cfg_isp["w"])
 s_isp = int(cfg_isp["s"])
@@ -994,7 +1045,7 @@ if costa_isp:
 
     quota_desc = "" if n_isp == 1 else (" - a contatto (d = 0 mm)" if d_isp == 0 else f" - d = {d_isp:.0f} mm")
     simbolo_posa = "[ | ]" if n_isp == 1 else (f"[ {'|'*n_isp} ]" if d_isp == 0 else f"[ {' | '*n_isp} ]")
-    ax_cad.set_title(f"Sezione Ramo {cfg_isp['id']} Posa di Costa {simbolo_posa}\n{n_isp}x({h_isp}x{s_isp} mm){quota_desc}", fontweight='bold', fontsize=11)
+    ax_cad.set_title(f"Sezione Tratto a Sbalzo Ramo {cfg_isp['id']} Posa di Costa {simbolo_posa}\n{n_isp}x({h_isp}x{s_isp} mm){quota_desc}", fontweight='bold', fontsize=11)
     ax_cad.set_xlim(-max(55, tot_w * 0.85), max(55, tot_w * 0.85))
     ax_cad.set_ylim(-35, h_isp + 40)
 
@@ -1015,7 +1066,7 @@ else:
 
     quota_desc = "" if n_isp == 1 else (" - a contatto (d = 0 mm)" if d_isp == 0 else f" - distanziate d = {d_isp:.0f} mm")
     simbolo_posa = "[ — ]" if n_isp == 1 else ("[ = ]" if n_isp == 2 else "[ ≡ ]")
-    ax_cad.set_title(f"Sezione Ramo {cfg_isp['id']} Posa di Piatto {simbolo_posa}\n{n_isp}x({h_isp}x{s_isp} mm){quota_desc}", fontweight='bold', fontsize=11)
+    ax_cad.set_title(f"Sezione Tratto a Sbalzo Ramo {cfg_isp['id']} Posa di Piatto {simbolo_posa}\n{n_isp}x({h_isp}x{s_isp} mm){quota_desc}", fontweight='bold', fontsize=11)
     ax_cad.set_xlim(-h_isp * 0.75, h_isp * 0.75)
     ax_cad.set_ylim(-30, max(110, tot_h + 40))
 
@@ -1039,7 +1090,7 @@ ax_curva.scatter([d_isp], [mb_isp["I_amm"]], color='#D62828', s=90, zorder=6, la
 ax_curva.axhline(I_op_isp, color='#003049', linestyle='-.', lw=1.8, label=f"Corrente Operativa FDM I_{cfg_isp['id']} ({I_op_isp:.0f} A)")
 ax_curva.axvline(s_isp, color='#D62828', linestyle='--', alpha=0.7, label=f"Passo naturale d = s ({s_isp} mm)")
 ax_curva.set_title(f"Portata Ammissibile I_amm [A] vs Distanza Netta d [mm] (Ramo {cfg_isp['id']})", fontweight='bold', fontsize=11)
-ax_curva.set_xlabel("Distanza netta d tra i conduttori in parallelo [mm]")
+ax_curva.set_xlabel("Distanza netta d tra i conduttori in parallelo sul tratto a sbalzo [mm]")
 ax_curva.set_ylabel("Portata Ammissibile I_amm [A]")
 ax_curva.grid(True, linestyle='--', alpha=0.6)
 ax_curva.legend(loc="lower right", frameon=True, fontsize=8.8)
@@ -1049,7 +1100,7 @@ st.pyplot(fig_rev)
 plt.close(fig_rev)
 
 # ==============================================================================
-# 9. SPECIFICA TECNICA PER UFFICIO TECNICO E PRODUZIONE (DFM REV. 2.2)
+# 9. SPECIFICA TECNICA PER UFFICIO TECNICO E PRODUZIONE (DFM REV. 2.4)
 # ==============================================================================
 st.subheader(f"📋 Specifica di Industrializzazione e Linee Guida DFM (Ramo {cfg_isp['id']} - {n_isp}x {h_isp}x{s_isp} mm)")
 
@@ -1066,9 +1117,9 @@ with col_d1:
     st.write(f"- Profondità di penetrazione (Skin Depth): **{skin_str}**")
 
 with col_d2:
-    st.markdown("**Dilatazioni Termiche ed Elettrodinamica**")
+    st.markdown("**Dilatazioni Termiche, Piegatura ed Elettrodinamica**")
+    st.write(f"- Spessore pacco serrato a contatto sul sormonto: **{cfg_isp['spess_sorm_z']:.0f} mm** ({n_isp}x{s_isp} mm, d_sorm = 0 mm)")
     st.write(f"- Dilatazione da posa in officina (20 °C -> {T_regime:.0f} °C): **{mb_isp['Delta_L_posa_mm']:.2f} mm** (su {lungh_tratta_in:.1f} m)")
-    st.write(f"- Dilatazione per solo salto termico (DeltaT = {dt_in} K): **{mb_isp['Delta_L_DT_mm']:.2f} mm**")
     st.write(f"- Luce minima asola su supporti CAD: **{max(6.0, mb_isp['Delta_L_posa_mm'] + 4.0):.1f} mm**")
     if n_isp > 1 and d_isp > 0:
         st.write(f"- Forza attrattiva sub-conduttori (Ip = {mb_isp['i_picco_kA']:.0f} kA): **{mb_isp['F_sub_Nm']:,.0f} N/m**")
@@ -1087,10 +1138,10 @@ with col_d3:
 # 10. TABELLA ANALITICA COEFFICIENTI K1..K9 ED ESPORTAZIONE CSV
 # ==============================================================================
 st.markdown("---")
-st.subheader("📊 Report Analitico Completo (Piastra e Rami in Uscita con Appoggio Ideale)")
+st.subheader("📊 Report Analitico Completo (Piastra e Rami in Uscita con Sormonto a Contatto)")
 st.caption(
-    "**Nota Tecnica:** Le barre sono approssimate come con **appoggio ideale** sulla piastra collettrice. "
-    "Il coefficiente $K_7$ valuta il mutuo accoppiamento termico tra le sbarre in parallelo appartenenti al medesimo fascio."
+    "**Nota Tecnica:** Sul sormonto imbullonato le sbarre del fascio sono serrate **a contatto diretto ($d=0\\text{ mm}$)**. "
+    "Il coefficiente $K_7$ valuta il mutuo accoppiamento termico tra le sbarre distanziate di $d$ lungo il tratto a sbalzo."
 )
 
 righe_export = [
@@ -1099,7 +1150,7 @@ righe_export = [
         "Configurazione Posa": f"{n_piastra}x({B_piastra:.0f}x{s_piastra:.0f} mm) Di costa",
         "Metallo": mat_scelto,
         "Sezione Totale [mm²]": int(sez_piastra),
-        "Distanza d [mm]": d_piastra if n_piastra > 1 else 0,
+        "Distanza d Sbalzo [mm]": d_piastra if n_piastra > 1 else 0,
         "I_operativa FDM [A]": round(I_sez_piastra_max, 1),
         "J_operativa [A/mm²]": round(J_sez_piastra_max, 2),
         "I_amm [A]": round(mb_piastra["I_amm"], 1),
@@ -1115,12 +1166,16 @@ righe_export = [
         "Delta_L da 20°C [mm]": round(mb_piastra["Delta_L_posa_mm"], 2),
         "Passo Max Spaziatori [mm]": round(mb_piastra["L_max_spacers_mm"], 0)
     },
-    {
-        "Elemento": "Ramo Uscita A (Appoggio Ideale)",
+
+]
+
+if attiva_A:
+    righe_export.append({
+        "Elemento": "Ramo Uscita A (Sormonto a Contatto)",
         "Configurazione Posa": f"{cfg_A['n']}x({cfg_A['w']:.0f}x{cfg_A['s']:.0f} mm) {cfg_A['posa_str']}",
         "Metallo": mat_scelto,
         "Sezione Totale [mm²]": int(sez_A),
-        "Distanza d [mm]": cfg_A["d"] if cfg_A["n"] > 1 else 0,
+        "Distanza d Sbalzo [mm]": cfg_A["d"] if cfg_A["n"] > 1 else 0,
         "I_operativa FDM [A]": round(res["I_A"], 1),
         "J_operativa [A/mm²]": round(J_L_A, 2),
         "I_amm [A]": round(mb_A["I_amm"], 1),
@@ -1135,16 +1190,15 @@ righe_export = [
         "Icw 1s Excel [kA]": round(mb_A["Icw_1s_Excel"], 1),
         "Delta_L da 20°C [mm]": round(mb_A["Delta_L_posa_mm"], 2),
         "Passo Max Spaziatori [mm]": round(mb_A["L_max_spacers_mm"], 0)
-    }
-]
+    })
 
 if attiva_B:
     righe_export.append({
-        "Elemento": "Ramo Uscita B (Appoggio Ideale)",
+        "Elemento": "Ramo Uscita B (Sormonto a Contatto)",
         "Configurazione Posa": f"{cfg_B['n']}x({cfg_B['w']:.0f}x{cfg_B['s']:.0f} mm) {cfg_B['posa_str']}",
         "Metallo": mat_scelto,
         "Sezione Totale [mm²]": int(sez_B),
-        "Distanza d [mm]": cfg_B["d"] if cfg_B["n"] > 1 else 0,
+        "Distanza d Sbalzo [mm]": cfg_B["d"] if cfg_B["n"] > 1 else 0,
         "I_operativa FDM [A]": round(res["I_B"], 1),
         "J_operativa [A/mm²]": round(J_L_B, 2),
         "I_amm [A]": round(mb_B["I_amm"], 1),
@@ -1166,8 +1220,8 @@ st.dataframe(df_export, use_container_width=True)
 
 csv_data = df_export.to_csv(index=False, sep=";").encode('utf-8')
 st.download_button(
-    label="💾 Scarica Report Tecnico Unificato 2D FDM + Rev. 2.2 (CSV)",
+    label="💾 Scarica Report Tecnico Unificato 2D FDM + Rev. 2.4 (CSV)",
     data=csv_data,
-    file_name=f"Report_Busbar_FDM_Rev22_{num_rami}Rami_{B_piastra:.0f}x{H_piastra:.0f}mm.csv",
+    file_name=f"Report_Busbar_FDM_Rev24_{config_rami.replace(' ', '').replace('+', 'e')}_{B_piastra:.0f}x{H_piastra:.0f}mm.csv",
     mime="text/csv"
 )
