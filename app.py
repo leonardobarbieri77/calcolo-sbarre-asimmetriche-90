@@ -11,7 +11,7 @@ import streamlit as st
 # CONFIGURAZIONE INTERFACCIA STREAMLIT
 # ==============================================================================
 st.set_page_config(
-    page_title="LOADBANK-MASTER | Busbar 2D FDM + Verifiche Rev. 2.1",
+    page_title="LOADBANK-MASTER | Busbar 2D FDM + Verifiche Rev. 2.2",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -81,7 +81,7 @@ MODO_VERT = "Verticale (90° - Piega lungo Y, ala di costa)"
 
 
 # ==============================================================================
-# 2. MOTORE COMPLETO ELETTROTERMICO, CORTOCIRCUITO ED ELETTRODINAMICA (REV. 2.1)
+# 2. MOTORE COMPLETO ELETTROTERMICO, CORTOCIRCUITO ED ELETTRODINAMICA (REV. 2.2)
 # ==============================================================================
 def esegui_calcolo_completo(
     h, s, n, d, giacitura_costa, metallo_str, freq, t_amb, dt,
@@ -307,6 +307,14 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
     s_b = st.sidebar.number_input(f"Spessore Singola Barra {id_barra} (s) [mm]", min_value=3.0, max_value=30.0, value=10.0, step=1.0, key=f"s_{id_barra}")
     L_b = st.sidebar.number_input(f"Lunghezza Ramo {id_barra} a sbalzo su piastra [mm]", min_value=20.0, max_value=1500.0, value=120.0, step=10.0, key=f"L_{id_barra}")
 
+    spess_fascio = n_b * s_b + (n_b - 1) * d_b
+    if h_b < spess_fascio:
+        st.sidebar.warning(
+            f"⚠️ Ramo {id_barra}: la profondità di sormonto ({h_b:.0f} mm) è inferiore all'ingombro "
+            f"complessivo di piega del fascio ({spess_fascio:.0f} mm per {n_b} sbarre). "
+            f"Si consiglia una profondità sormonto >= {spess_fascio:.0f} mm."
+        )
+
     if orient == MODO_ORIZZ:
         dx_sorm, dy_sorm = w_b, h_b
         lato_piega = st.sidebar.selectbox(
@@ -358,18 +366,36 @@ def configura_barra_sidebar(id_barra, x_def, y_def, orient_def_idx, lato_def_idx
             value=float(min(max(y_def, min_y), max_y)), step=5.0, key=f"ys_{id_barra}"
         )
 
+    # Calcolo coordinate individuali di stacco per ciascuna delle n_b sbarre del fascio
     if orient == MODO_ORIZZ:
+        y0_s = y_sorm - dy_sorm / 2.0
+        y1_s = y_sorm + dy_sorm / 2.0
+        if "Inferiore" in lato_piega:
+            y_ala_list = [y0_s + idx_b * (s_b + d_b) + s_b / 2.0 for idx_b in range(n_b)]
+        else:
+            y_ala_list = [y1_s - idx_b * (s_b + d_b) - s_b / 2.0 for idx_b in range(n_b)]
+        x_ala_list = [x_sorm for _ in range(n_b)]
         x_ala = x_sorm
-        y_ala = (y_sorm - dy_sorm / 2.0 + s_b / 2.0) if "Inferiore" in lato_piega else (y_sorm + dy_sorm / 2.0 - s_b / 2.0)
+        y_ala = float(np.mean(y_ala_list))
     else:
+        x0_s = x_sorm - dx_sorm / 2.0
+        x1_s = x_sorm + dx_sorm / 2.0
+        if "Sinistro" in lato_piega:
+            x_ala_list = [x0_s + idx_b * (s_b + d_b) + s_b / 2.0 for idx_b in range(n_b)]
+        else:
+            x_ala_list = [x1_s - idx_b * (s_b + d_b) - s_b / 2.0 for idx_b in range(n_b)]
+        y_ala_list = [y_sorm for _ in range(n_b)]
         y_ala = y_sorm
-        x_ala = (x_sorm - dx_sorm / 2.0 + s_b / 2.0) if "Sinistro" in lato_piega else (x_sorm + dx_sorm / 2.0 - s_b / 2.0)
+        x_ala = float(np.mean(x_ala_list))
 
     return {
         "id": id_barra, "orient": orient, "n": n_b, "d": d_b,
         "w": w_b, "h": h_b, "s": s_b, "L": L_b,
+        "spess_fascio": spess_fascio,
         "dx": dx_sorm, "dy": dy_sorm, "x_sorm": x_sorm, "y_sorm": y_sorm,
-        "x_ala": x_ala, "y_ala": y_ala, "lato_piega": lato_piega,
+        "x_ala": x_ala, "y_ala": y_ala,
+        "x_ala_list": x_ala_list, "y_ala_list": y_ala_list,
+        "lato_piega": lato_piega,
         "costa": giacitura_ala_costa, "posa_str": posa_str
     }
 
@@ -385,9 +411,9 @@ st.sidebar.info(
 )
 
 # ==============================================================================
-# 4. INTESTAZIONE, VERIFICHE GEOMETRICHE E CALCOLO REV. 2.1
+# 4. INTESTAZIONE, VERIFICHE GEOMETRICHE E CALCOLO REV. 2.2
 # ==============================================================================
-st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar (2D FDM + Rev. 2.1)")
+st.title("⚡ LOADBANK-MASTER | Progettazione Elettrotermica e Meccanica Busbar (2D FDM + Rev. 2.2)")
 st.markdown(
     """
     **Quadro Normativo Applicato:**  
@@ -587,7 +613,7 @@ res = risolvi_busbar_2d(
 )
 
 # ==============================================================================
-# 6. AVVISI DI CONFORMITÀ NORMATIVA (REV. 2.1) E SCHEDE KPI
+# 6. AVVISI DI CONFORMITÀ NORMATIVA (REV. 2.2) E SCHEDE KPI
 # ==============================================================================
 p_A = res["I_A"] / I_totale * 100.0
 p_B = (res["I_B"] / I_totale * 100.0) if attiva_B else 0.0
@@ -670,7 +696,7 @@ st.markdown("---")
 # ==============================================================================
 # 7. DASHBOARD GRAFICA 2D FDM E LAYOUT MECCANICO A 5 VISTE
 # ==============================================================================
-st.subheader("🗺️ Mappa Elettrodinamica 2D FDM e Proiezioni Meccaniche (Piastra + Sormonti)")
+st.subheader("🗺️ Mappa Elettrodinamica 2D FDM e Proiezioni Meccaniche (Piastra + Sormonti + Fasci a Sbalzo)")
 fig = plt.figure(figsize=(26, 10))
 gs = fig.add_gridspec(1, 5, width_ratios=[1.0, 1.0, 0.95, 0.85, 1.05])
 
@@ -684,13 +710,24 @@ ax5 = fig.add_subplot(gs[0, 4])
 def disegna_impronta_e_piega(ax, cfg, perc, colore_bordo):
     x0 = cfg["x_sorm"] - cfg["dx"] / 2.0
     y0 = cfg["y_sorm"] - cfg["dy"] / 2.0
-    ax.add_patch(patches.Rectangle((x0, y0), cfg["dx"], cfg["dy"], edgecolor=colore_bordo, facecolor='none', linewidth=2.2, linestyle='--'))
+    ax.add_patch(patches.Rectangle(
+        (x0, y0), cfg["dx"], cfg["dy"],
+        edgecolor=colore_bordo, facecolor='none', linewidth=2.2, linestyle='--'
+    ))
+    # Disegno delle n sezioni di stacco del fascio a sbalzo
     if cfg["orient"] == MODO_ORIZZ:
-        y_p = y0 if "Inferiore" in cfg["lato_piega"] else (y0 + cfg["dy"])
-        ax.plot([x0, x0 + cfg["dx"]], [y_p, y_p], color='#00ff00', linewidth=4.5)
+        for y_c_b in cfg["y_ala_list"]:
+            ax.add_patch(patches.Rectangle(
+                (x0, y_c_b - cfg["s"] / 2.0), cfg["dx"], cfg["s"],
+                edgecolor='#00ff00', facecolor='#00ff00', alpha=0.45, linewidth=1.6
+            ))
     else:
-        x_p = x0 if "Sinistro" in cfg["lato_piega"] else (x0 + cfg["dx"])
-        ax.plot([x_p, x_p], [y0, y0 + cfg["dy"]], color='#00ff00', linewidth=4.5)
+        for x_c_b in cfg["x_ala_list"]:
+            ax.add_patch(patches.Rectangle(
+                (x_c_b - cfg["s"] / 2.0, y0), cfg["s"], cfg["dy"],
+                edgecolor='#00ff00', facecolor='#00ff00', alpha=0.45, linewidth=1.6
+            ))
+
     rot_tag = "0°" if cfg["orient"] == MODO_ORIZZ else "90°"
     ax.text(
         cfg["x_sorm"], cfg["y_sorm"], f"{cfg['id']} ({cfg['n']}x, {rot_tag})\n{perc:.1f}%",
@@ -703,6 +740,8 @@ rami_attivi_plot = [(cfg_A, 'blue', p_A, res["I_A"])]
 if attiva_B:
     rami_attivi_plot.append((cfg_B, 'green', p_B, res["I_B"]))
 
+max_spess_fascio = max(c["spess_fascio"] for c, _, _, _ in rami_attivi_plot)
+
 # 1. MAPPA DENSITÀ |J|
 im1 = ax1.pcolormesh(res["X"], res["Y"], res["J_mag"], shading='auto', cmap='inferno', vmin=0, vmax=max(mb_piastra["J_amm"] * 1.3, J_99_piastra))
 cbar1 = fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
@@ -714,7 +753,7 @@ for (xp, yp) in res["coords_pl"]:
 disegna_impronta_e_piega(ax1, cfg_A, p_A, 'cyan')
 if attiva_B:
     disegna_impronta_e_piega(ax1, cfg_B, p_B, 'cyan')
-ax1.set_title("1. Densità |J| e Piega (Verde)", fontsize=12, weight='bold')
+ax1.set_title("1. Densità |J| e Stacco Barre (Verde)", fontsize=12, weight='bold')
 ax1.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
 ax1.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
 ax1.set_xlim(0, B_piastra)
@@ -755,7 +794,7 @@ ax3.grid(True, linestyle='--', alpha=0.5)
 ax3.legend(loc='upper right', fontsize=9.5)
 ax3.tick_params(labelsize=10)
 
-# 4. PROIEZIONE LATERALE Y-Z
+# 4. PROIEZIONE LATERALE Y-Z (SDOPPIAMENTO COMPLETO SORMONTO + ALA A SBALZO)
 L_DRAW_MAX = 150.0
 prof_pl_disegno = diam_pl * 1.4
 spess_tot_p = n_piastra * s_piastra + (n_piastra - 1) * d_piastra
@@ -767,17 +806,48 @@ for idx_p in range(n_piastra):
 for cfg, colore, pc, corr_ramo in rami_attivi_plot:
     L_dis = min(cfg["L"], L_DRAW_MAX)
     y_bot = cfg["y_sorm"] - cfg["dy"] / 2.0
+    y_top = cfg["y_sorm"] + cfg["dy"] / 2.0
+
     for idx_b in range(cfg["n"]):
         off_b = idx_b * (cfg["s"] + cfg["d"])
-        ax4.add_patch(patches.Rectangle((spess_tot_p + off_b, y_bot), cfg["s"], cfg["dy"], facecolor='#d9822b', edgecolor='black', linewidth=1.2))
+        z_sorm_b = spess_tot_p + off_b
+
         if cfg["orient"] == MODO_ORIZZ:
-            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, cfg["y_ala"] - cfg["s"] / 2.0), L_dis, cfg["s"], facecolor='#e68a00', edgecolor='black', linewidth=1.1))
+            # Sviluppo a L concentrico nel piano Y-Z: ogni barra ha la propria quota Y sull'ala a sbalzo
+            y_ala_bot_b = cfg["y_ala_list"][idx_b] - cfg["s"] / 2.0
+            if "Inferiore" in cfg["lato_piega"]:
+                y_sorm_start = y_ala_bot_b
+                h_sorm_b = max(cfg["s"], y_top - y_sorm_start)
+            else:
+                y_sorm_end = y_ala_bot_b + cfg["s"]
+                y_sorm_start = min(y_bot, y_ala_bot_b)
+                h_sorm_b = max(cfg["s"], y_sorm_end - y_sorm_start)
+
+            # Tratto verticale di sormonto della singola barra idx_b
+            ax4.add_patch(patches.Rectangle(
+                (z_sorm_b, y_sorm_start), cfg["s"], h_sorm_b,
+                facecolor='#d9822b', edgecolor='black', linewidth=1.2
+            ))
+            # Tratto orizzontale a sbalzo della singola barra idx_b (sdoppiato lungo Y con passo s + d)
+            ax4.add_patch(patches.Rectangle(
+                (z_sorm_b + cfg["s"], y_ala_bot_b), L_dis, cfg["s"],
+                facecolor='#e68a00', edgecolor='black', linewidth=1.1
+            ))
         else:
-            ax4.add_patch(patches.Rectangle((spess_tot_p + cfg["s"] + off_b, y_bot), L_dis, cfg["dy"], facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.6, hatch='//'))
+            # In MODO_VERT le sbarre a sbalzo sono affiancate lungo X; in vista Y-Z si vedono di costa
+            ax4.add_patch(patches.Rectangle(
+                (z_sorm_b, y_bot), cfg["s"], cfg["dy"],
+                facecolor='#d9822b', edgecolor='black', linewidth=1.2
+            ))
+            ax4.add_patch(patches.Rectangle(
+                (z_sorm_b + cfg["s"], y_bot), L_dis, cfg["dy"],
+                facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.55, hatch='//'
+            ))
 
     y_testo = cfg["y_ala"] if cfg["orient"] == MODO_ORIZZ else cfg["y_sorm"]
+    z_fine_fascio = spess_tot_p + cfg["spess_fascio"] + L_dis
     ax4.text(
-        spess_tot_p + cfg["s"] + L_dis + 10, y_testo,
+        z_fine_fascio + 10, y_testo,
         f"{cfg['id']} ({cfg['n']}x): {pc:.1f}%\n({corr_ramo:.0f} A)",
         color=colore, fontsize=9.5, weight='bold', va='center'
     )
@@ -789,12 +859,12 @@ for yp in y_pl_unici:
 ax4.set_title("4. Sezione Laterale Y-Z", fontsize=12, weight='bold')
 ax4.set_xlabel("Profondità Z [mm]", fontsize=11, weight='bold')
 ax4.set_ylabel("Quota Y [mm]", fontsize=11, weight='bold')
-ax4.set_xlim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 160)
+ax4.set_xlim(-prof_pl_disegno - 30, spess_tot_p + max_spess_fascio + L_DRAW_MAX + 170)
 ax4.set_ylim(0, H_piastra)
 ax4.grid(True, linestyle=':', alpha=0.5)
 ax4.tick_params(labelsize=10)
 
-# 5. VISTA DALL'ALTO X-Z
+# 5. VISTA DALL'ALTO X-Z (SDOPPIAMENTO COMPLETO SORMONTO + ALA A SBALZO)
 for idx_p in range(n_piastra):
     z0_p = idx_p * (s_piastra + d_piastra)
     ax5.add_patch(patches.Rectangle((0, z0_p), B_piastra, s_piastra, facecolor='#b87333', edgecolor='black', linewidth=1.2))
@@ -806,30 +876,48 @@ for xp in x_pl_unici:
 for cfg, colore, pc, corr_ramo in rami_attivi_plot:
     L_dis = min(cfg["L"], L_DRAW_MAX)
     x_sorm_start = cfg["x_sorm"] - cfg["dx"] / 2.0
+    x_sorm_end = cfg["x_sorm"] + cfg["dx"] / 2.0
 
     for idx_b in range(cfg["n"]):
         off_z = idx_b * (cfg["s"] + cfg["d"])
-
-        ax5.add_patch(patches.Rectangle(
-            (x_sorm_start, spess_tot_p + off_z), cfg["dx"], cfg["s"],
-            facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
-        ))
+        z_sorm_b = spess_tot_p + off_z
 
         if cfg["orient"] == MODO_ORIZZ:
+            # In MODO_ORIZZ le sbarre a sbalzo sono impilate lungo Y; in pianta X-Z si vedono di piatto
             ax5.add_patch(patches.Rectangle(
-                (x_sorm_start, spess_tot_p + cfg["s"] + off_z), cfg["dx"], L_dis,
-                facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.75
+                (x_sorm_start, z_sorm_b), cfg["dx"], cfg["s"],
+                facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
+            ))
+            ax5.add_patch(patches.Rectangle(
+                (x_sorm_start, z_sorm_b + cfg["s"]), cfg["dx"], L_dis,
+                facecolor='#e68a00', edgecolor='black', linewidth=1.1, alpha=0.65
             ))
         else:
-            x_ala_start = cfg["x_ala"] - cfg["s"] / 2.0
+            # Sviluppo a L concentrico nel piano X-Z: ogni barra ha la propria ascissa X sull'ala a sbalzo
+            x_ala_left_b = cfg["x_ala_list"][idx_b] - cfg["s"] / 2.0
+            if "Sinistro" in cfg["lato_piega"]:
+                x_sorm_b = x_ala_left_b
+                w_sorm_b = max(cfg["s"], x_sorm_end - x_sorm_b)
+            else:
+                x_sorm_right_b = x_ala_left_b + cfg["s"]
+                x_sorm_b = min(x_sorm_start, x_ala_left_b)
+                w_sorm_b = max(cfg["s"], x_sorm_right_b - x_sorm_b)
+
+            # Tratto orizzontale di sormonto della singola barra idx_b
             ax5.add_patch(patches.Rectangle(
-                (x_ala_start, spess_tot_p + cfg["s"] + off_z), cfg["s"], L_dis,
+                (x_sorm_b, z_sorm_b), w_sorm_b, cfg["s"],
+                facecolor='#d9822b', edgecolor='black', linewidth=1.2, hatch='..'
+            ))
+            # Tratto verticale a sbalzo della singola barra idx_b (sdoppiato lungo X con passo s + d)
+            ax5.add_patch(patches.Rectangle(
+                (x_ala_left_b, z_sorm_b + cfg["s"]), cfg["s"], L_dis,
                 facecolor='#e68a00', edgecolor='black', linewidth=1.1, hatch='//'
             ))
 
     x_testo = cfg["x_sorm"] if cfg["orient"] == MODO_ORIZZ else cfg["x_ala"]
+    z_fine_fascio = spess_tot_p + cfg["spess_fascio"] + L_dis
     ax5.text(
-        x_testo, spess_tot_p + L_dis + 10,
+        x_testo, z_fine_fascio + 10,
         f"{cfg['id']} ({cfg['n']}x)\n{corr_ramo:.0f} A ({pc:.1f}%)",
         color=colore, fontsize=9.5, weight='bold', ha='center', va='bottom'
     )
@@ -840,7 +928,7 @@ ax5.set_title("5. Pianta Meccanica X-Z (Con Sormonto)", fontsize=12, weight='bol
 ax5.set_xlabel("Larghezza X [mm]", fontsize=11, weight='bold')
 ax5.set_ylabel("Profondità Z [mm]", fontsize=11, weight='bold')
 ax5.set_xlim(-20, B_piastra + 20)
-ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + L_DRAW_MAX + 150)
+ax5.set_ylim(-prof_pl_disegno - 30, spess_tot_p + max_spess_fascio + L_DRAW_MAX + 160)
 ax5.grid(True, linestyle=':', alpha=0.5)
 ax5.tick_params(labelsize=10)
 
@@ -849,10 +937,10 @@ st.pyplot(fig)
 plt.close(fig)
 
 # ==============================================================================
-# 8. VERIFICA EFFETTI TERMICI TRA SBARRE PARALLELE DEL FASCIO (GRAFICI REV. 2.1)
+# 8. VERIFICA EFFETTI TERMICI TRA SBARRE PARALLELE DEL FASCIO (GRAFICI REV. 2.2)
 # ==============================================================================
 st.markdown("---")
-st.subheader("🔥 Verifica Effetti Termici ed Effetto Pelle tra Sbarre Parallele del Ramo (Rev. 2.1)")
+st.subheader("🔥 Verifica Effetti Termici ed Effetto Pelle tra Sbarre Parallele del Ramo (Rev. 2.2)")
 
 if attiva_B:
     ramo_ispezione = st.radio(
@@ -918,6 +1006,12 @@ else:
         y0 = i * (s_isp + d_isp)
         rect = patches.Rectangle((-h_isp / 2.0, y0), h_isp, s_isp, lw=1.8, edgecolor='#3A1C00', facecolor=colore_metallo, alpha=0.9)
         ax_cad.add_patch(rect)
+        if sk != float("inf") and s_isp > 2 * sk and h_isp > 2 * sk:
+            core = patches.Rectangle(
+                (-h_isp / 2.0 + sk, y0 + sk), h_isp - 2 * sk, s_isp - 2 * sk,
+                lw=1.0, linestyle='--', edgecolor='#222222', facecolor='#F3B684', alpha=0.5
+            )
+            ax_cad.add_patch(core)
 
     quota_desc = "" if n_isp == 1 else (" - a contatto (d = 0 mm)" if d_isp == 0 else f" - distanziate d = {d_isp:.0f} mm")
     simbolo_posa = "[ — ]" if n_isp == 1 else ("[ = ]" if n_isp == 2 else "[ ≡ ]")
@@ -955,7 +1049,7 @@ st.pyplot(fig_rev)
 plt.close(fig_rev)
 
 # ==============================================================================
-# 9. SPECIFICA TECNICA PER UFFICIO TECNICO E PRODUZIONE (DFM REV. 2.1)
+# 9. SPECIFICA TECNICA PER UFFICIO TECNICO E PRODUZIONE (DFM REV. 2.2)
 # ==============================================================================
 st.subheader(f"📋 Specifica di Industrializzazione e Linee Guida DFM (Ramo {cfg_isp['id']} - {n_isp}x {h_isp}x{s_isp} mm)")
 
@@ -1072,8 +1166,8 @@ st.dataframe(df_export, use_container_width=True)
 
 csv_data = df_export.to_csv(index=False, sep=";").encode('utf-8')
 st.download_button(
-    label="💾 Scarica Report Tecnico Unificato 2D FDM + Rev. 2.1 (CSV)",
+    label="💾 Scarica Report Tecnico Unificato 2D FDM + Rev. 2.2 (CSV)",
     data=csv_data,
-    file_name=f"Report_Busbar_FDM_Rev21_{num_rami}Rami_{B_piastra:.0f}x{H_piastra:.0f}mm.csv",
+    file_name=f"Report_Busbar_FDM_Rev22_{num_rami}Rami_{B_piastra:.0f}x{H_piastra:.0f}mm.csv",
     mime="text/csv"
 )
